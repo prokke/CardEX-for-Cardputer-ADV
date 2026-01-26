@@ -1,0 +1,35 @@
+# Arduino & PlatformIO
+.pio/
+.vscode/
+*.elf
+*.bin
+*.hex
+*.map
+*.bak
+*.d
+*.o
+*.lst
+*.a
+*.s
+
+# ESP32 / Arduino specific
+sdkconfig
+sdkconfig.old
+build/
+output/
+
+# OS specific
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.idea/
+*.swp
+*~
+*.sublime-workspace
+*.sublime-project
+
+# Local config (if any)
+local_config.h
+secrets.h
