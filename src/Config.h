@@ -104,8 +104,28 @@ extern bool SOUND_ENABLED;
 extern bool SOUND_KEY_CLICK;
 extern int SOUND_VOLUME;
 
+// ==================== STATUS LED (ADV/Cardputer: WS2812 on G21) ====================
+// 24-bit RGB, unlike the RGB565 used for the screen palette.
+#define DEFAULT_LED_BRIGHTNESS 40
+#define DEFAULT_LED_COLOR_IDLE 0x000000      // off while simply browsing
+#define DEFAULT_LED_COLOR_CLIPBOARD 0xFF6000 // amber: something to paste
+#define DEFAULT_LED_COLOR_EDIT 0x0040FF      // blue: unsaved changes
+#define DEFAULT_LED_COLOR_USB 0x00C0FF       // cyan: card owned by the host
+#define DEFAULT_LED_COLOR_OK 0x00FF00
+#define DEFAULT_LED_COLOR_ERROR 0xFF0000
+
+extern bool LED_ENABLED;
+extern int LED_BRIGHTNESS;
+extern int LED_COLOR_IDLE;
+extern int LED_COLOR_CLIPBOARD;
+extern int LED_COLOR_EDIT;
+extern int LED_COLOR_USB;
+extern int LED_COLOR_OK;
+extern int LED_COLOR_ERROR;
+
 // ==================== CONFIG ====================
 #define CONFIG_FILE_PATH "/CardEX.ini"
+#define BOOKMARKS_FILE_PATH "/CardEX.bookmarks"
 
 
 // ==================== KEYBOARD KEYS ====================

@@ -19,6 +19,14 @@ struct FileEntry {
   size_t size = 0;
   time_t modified = 0;
 
+  // Marked with a star and sorted above everything else.
+  bool bookmarked = false;
+
+  // Multi-selection. Lives on the entry rather than in a separate set because
+  // the listing is rebuilt whenever the directory changes, which is exactly
+  // when the selection should be dropped anyway.
+  bool selected = false;
+
   // Get formatted size string
   String getSizeStr() const {
     if (isDirectory)
@@ -26,13 +34,9 @@ struct FileEntry {
     return String(PathUtils::formatBytes(size).c_str());
   }
 
-  // Comparison for sorting
+  // Ordering is applied by FileOps::sortEntries, which also honours the sort
+  // settings; this is only the name fallback.
   bool operator<(const FileEntry &other) const {
-    // Directories first
-    if (isDirectory != other.isDirectory) {
-      return isDirectory;
-    }
-    // Then alphabetically
     return name.compareTo(other.name) < 0;
   }
 };

@@ -24,6 +24,9 @@ If you build with an older M5Cardputer, expect the `Fn` shortcuts to misbehave.
 
 ### File management
 - **Browse, create, rename, delete** files and folders on the SD card.
+- **Multi-select** with `Space` — copy, cut and delete act on everything ticked.
+- **Bookmarks** (`Fn+B`) — favourites are marked with a `*` and always sort to the top of the
+  list, whatever the sort mode.
 - **Copy, cut and paste**, including whole folders.
 - **Recursive search** by name, with results you can open directly.
 - **Sorting** by name, size or date, ascending or descending; optional hidden files.
@@ -46,10 +49,16 @@ Files open according to what they are:
 - Preserves the file's original line endings (LF, CRLF or CR) and trailing newline.
 - Auto-indent, configurable tab width, optional autosave, line numbers.
 
+### Status LED
+The RGB LED reports what the app is doing: idle, something on the clipboard, unsaved edits in the
+editor, USB mass storage active, plus a brief flash on success or failure. Every colour, the
+brightness and the on/off switch are settings.
+
 ### Settings
 Everything is editable on the device (`Fn+O`) and stored in `/CardEX.ini` — colours, brightness,
-battery thresholds, sort order, editor behaviour, key repeat and sounds. Values are range-checked
-on load, so a hand-edited file cannot leave the app unusable.
+battery thresholds, sort order, editor behaviour, key repeat, sounds and the LED. Values are
+range-checked on load, so a hand-edited file cannot leave the app unusable. Colours are picked
+from a preset palette rather than typed as numbers.
 
 ## 🎮 Controls
 
@@ -69,6 +78,9 @@ characters instead.
 | `,` / `/` | Parent folder / open |
 | `Enter` | Open file or folder |
 | `Backspace` | Parent folder |
+| `Space` | Tick / untick the entry |
+| `Fn+A` | Select all / clear selection |
+| `Fn+B` | Bookmark the entry |
 | `Fn+N` | New file or folder |
 | `Fn+C` / `Fn+X` / `Fn+V` | Copy / cut / paste |
 | `Fn+D` / `Fn+R` | Delete / rename |
@@ -102,6 +114,13 @@ characters instead.
 
 ### Settings
 `;` `.` move, `,` `/` change the value, `R` resets the current category, `Esc` saves and exits.
+
+## 📁 Files on the card
+
+| Path | Purpose |
+|------|---------|
+| `/CardEX.ini` | Settings. Delete it to return to defaults. |
+| `/CardEX.bookmarks` | Bookmarked paths, one per line. |
 
 ## 🛠 Build & flash
 
@@ -162,6 +181,7 @@ the next boot.
 | Keyboard | TCA8418 I²C matrix controller (INT on G11) |
 | microSD | SPI — CS G12, MOSI G14, CLK G40, MISO G39 |
 | Audio | ES8311 codec + NS4150B amplifier |
+| RGB LED | WS2812 on G21 |
 | Battery | 1750mAh |
 | RTC | none — file timestamps are not meaningful until time is set |
 

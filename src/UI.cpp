@@ -1,6 +1,7 @@
 #include "UI.h"
 
 #include "Feedback.h"
+#include "StatusLed.h"
 
 // Static variables
 M5Canvas UI::canvas(&M5Cardputer.Display);
@@ -145,72 +146,83 @@ void UI::drawFooterProgress(int percent, const String &status) {
 }
 
 // ==================== DRAW FILE LIST ====================
+// Row layout, left to right. The star column is reserved whether or not the
+// entry is bookmarked, so names stay aligned down the list:
+//
+//   0..2   selection bar
+//   5..13  type icon
+//   15..21 bookmark star
+//   23..   name, with the size right-aligned
 void UI::drawFileList(const std::vector<FileEntry> &files, int selected,
                       int scrollOffset) {
   int y = HEADER_HEIGHT + 2;
   // Use -2 to account for the top offset (y = HEADER + 2)
   // 111 - 2 = 109. 109 / 12 = 9.08 -> 9 lines.
-  int visibleLines = (CONTENT_HEIGHT - 2) / LINE_HEIGHT;
+  const int visibleLines = (CONTENT_HEIGHT - 2) / LINE_HEIGHT;
 
   for (int i = 0; i < visibleLines; i++) {
-    int fileIndex = i + scrollOffset;
+    const int fileIndex = i + scrollOffset;
 
-    // Check if we have a file to draw
-    if (fileIndex < files.size()) {
-      const FileEntry &entry = files[fileIndex];
-
-      // Highlight selected or clear background
-      if (fileIndex == selected) {
-        canvas.fillRect(0, y, SCREEN_WIDTH, LINE_HEIGHT, SELECTED_BG);
-        canvas.setTextColor(TEXT_COLOR, SELECTED_BG);
-      } else {
-        canvas.fillRect(0, y, SCREEN_WIDTH, LINE_HEIGHT, BG_COLOR);
-        canvas.setTextColor(TEXT_COLOR, BG_COLOR);
-      }
-
-      // Draw Icon Primitives
-      int iconX = 4;
-      int iconY = y + 2;
-      
-      if (entry.isDirectory) {
-        // Folder Icon (Yellow-ish/Orange)
-        uint16_t folderColor = 0xFD20; // WARNING_COLOR
-        // Simple folder shape
-        canvas.fillRect(iconX, iconY + 1, 8, 5, folderColor);
-        canvas.fillRect(iconX, iconY - 1, 4, 2, folderColor);
-      } else {
-         // File Icon (White/Grey)
-         uint16_t fileColor = SECONDARY_COLOR;
-         // Page shape
-         canvas.drawRect(iconX + 1, iconY, 6, 8, fileColor);
-         canvas.drawLine(iconX + 2, iconY + 2, iconX + 5, iconY + 2, fileColor);
-         canvas.drawLine(iconX + 2, iconY + 4, iconX + 5, iconY + 4, fileColor);
-      }
-
-      // Filename (truncated)
-      String displayName = truncateString(entry.name, 30);
-      canvas.drawString(displayName, 16, y + 2); // Shifted text x position
-
-      // Size (right-aligned)
-      String sizeStr = entry.getSizeStr();
-      int sizeX = SCREEN_WIDTH - (sizeStr.length() * CHAR_WIDTH) - 2;
-      canvas.drawString(sizeStr, sizeX, y + 2);
-    } else {
+    if (fileIndex >= (int)files.size()) {
       // Clear empty line
       canvas.fillRect(0, y, SCREEN_WIDTH, LINE_HEIGHT, BG_COLOR);
+      y += LINE_HEIGHT;
+      continue;
     }
+
+    const FileEntry &entry = files[fileIndex];
+    const bool isCursor = (fileIndex == selected);
+    const uint16_t rowBg = isCursor ? SELECTED_BG : BG_COLOR;
+
+    canvas.fillRect(0, y, SCREEN_WIDTH, LINE_HEIGHT, rowBg);
+
+    // Multi-selection bar. Distinct from the cursor highlight so both can be
+    // read at once - the cursor can sit on an unselected row and vice versa.
+    if (entry.selected) {
+      canvas.fillRect(0, y + 1, 3, LINE_HEIGHT - 2, ACCENT_COLOR);
+    }
+
+    // Type icon
+    const int iconX = 5;
+    const int iconY = y + 2;
+    if (entry.isDirectory) {
+      canvas.fillRect(iconX, iconY + 1, 8, 5, WARNING_COLOR);
+      canvas.fillRect(iconX, iconY - 1, 4, 2, WARNING_COLOR);
+    } else {
+      canvas.drawRect(iconX + 1, iconY, 6, 8, SECONDARY_COLOR);
+      canvas.drawLine(iconX + 2, iconY + 2, iconX + 5, iconY + 2, SECONDARY_COLOR);
+      canvas.drawLine(iconX + 2, iconY + 4, iconX + 5, iconY + 4, SECONDARY_COLOR);
+    }
+
+    // Bookmark star
+    if (entry.bookmarked) {
+      canvas.setTextColor(ACCENT_COLOR, rowBg);
+      canvas.drawString("*", 16, y + 2);
+    }
+
+    // Size first, so the name knows how much room is left.
+    const String sizeStr = entry.getSizeStr();
+    const int sizeX = SCREEN_WIDTH - ((int)sizeStr.length() * CHAR_WIDTH) - 2;
+    canvas.setTextColor(SECONDARY_COLOR, rowBg);
+    canvas.drawString(sizeStr, sizeX, y + 2);
+
+    const int nameX = 23;
+    const int nameChars = (sizeX - nameX - 4) / CHAR_WIDTH;
+    canvas.setTextColor(entry.selected ? ACCENT_COLOR : TEXT_COLOR, rowBg);
+    canvas.drawString(truncateString(entry.name, max(4, nameChars)), nameX,
+                      y + 2);
 
     y += LINE_HEIGHT;
   }
 
   // Scroll indicator
-  if (files.size() > visibleLines) {
-    int scrollBarHeight = CONTENT_HEIGHT - 4;
-    int thumbHeight =
-        max(10, (int)((visibleLines * scrollBarHeight) / files.size()));
-    int thumbY = HEADER_HEIGHT + 2 +
-                 (scrollOffset * (scrollBarHeight - thumbHeight)) /
-                     (int)(files.size() - visibleLines);
+  if ((int)files.size() > visibleLines) {
+    const int scrollBarHeight = CONTENT_HEIGHT - 4;
+    const int thumbHeight =
+        max(10, (visibleLines * scrollBarHeight) / (int)files.size());
+    const int thumbY = HEADER_HEIGHT + 2 +
+                       (scrollOffset * (scrollBarHeight - thumbHeight)) /
+                           max(1, (int)files.size() - visibleLines);
 
     canvas.fillRect(SCREEN_WIDTH - 3, thumbY, 2, thumbHeight, ACCENT_COLOR);
   }
@@ -440,13 +452,13 @@ void UI::showHelpMenu(bool isEditorMode) {
   };
   static const char *const managerHelp[] = {
       "; . , /    Up/Down/Back/Open",
-      "Bksp       Parent folder",
+      "Space      Select  Fn+A all",
+      "Fn+B       Bookmark (star)",
       "Fn+N       New file or folder",
       "Fn+D / R   Delete / Rename",
       "Fn+C/X/V   Copy / Cut / Paste",
       "Fn+P / F   Properties / Search",
-      "Fn+O       Settings",
-      "Fn+M       USB mass storage",
+      "Fn+O / M   Settings / USB",
   };
 
   const char *const *lines = isEditorMode ? editorHelp : managerHelp;
@@ -485,8 +497,10 @@ void UI::showToast(const String &message, uint16_t color) {
   // rather than needing every call site to pick one.
   if (color == ERROR_COLOR) {
     Feedback::error();
+    StatusLed::flashError();
   } else if (color == ACCENT_COLOR) {
     Feedback::confirm();
+    StatusLed::flashSuccess();
   }
   // Does not push, will be shown on next render
 }

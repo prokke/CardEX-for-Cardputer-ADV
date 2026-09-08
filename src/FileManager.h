@@ -47,6 +47,12 @@ public:
   void pasteFromClipboard();
   void showFileProperties();
 
+  // Multi-selection and bookmarks
+  void toggleSelection();
+  void selectAll(bool select);
+  void toggleBookmark();
+  int selectionCount() const;
+
   // Search
   void searchFiles();
 
@@ -111,6 +117,10 @@ private:
   void openFileByType(const String &path, size_t size);
   bool looksLikeText(const String &path);
   void updateFreeSpace(bool force);
+
+  // Paths the current action applies to: every selected entry, or the entry
+  // under the cursor when nothing is selected.
+  std::vector<String> targetPaths() const;
   void quitEditor();
   void ensureSelectionVisible();
 };

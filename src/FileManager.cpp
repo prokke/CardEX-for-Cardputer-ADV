@@ -1,5 +1,7 @@
 #include "FileManager.h"
+#include "Bookmarks.h"
 #include "Feedback.h"
+#include "StatusLed.h"
 #include "PathUtils.h"
 #include "Settings.h"
 #include "SettingsScreen.h"
@@ -101,6 +103,15 @@ void FileManager::update() {
   } else {
     handleKeyboard();
   }
+
+  // Unsaved work outranks a pending paste - it is the one that loses data.
+  if (inEditor && editor.isModified()) {
+    StatusLed::setState(LED_STATE_EDIT);
+  } else if (!clipboard.empty()) {
+    StatusLed::setState(LED_STATE_CLIPBOARD);
+  } else {
+    StatusLed::setState(LED_STATE_IDLE);
+  }
 }
 
 // ==================== UPDATE FREE SPACE ====================
@@ -132,8 +143,13 @@ void FileManager::render() {
                    lastBatteryLevel);
     UI::drawFileList(files, selectedIndex, scrollOffset);
 
-    // Footer info
-    String countInfo = String(files.size()) + " items";
+    // Footer info. The selection count replaces the item count while a
+    // selection exists - that is the number that matters then.
+    const int selectedCount = selectionCount();
+    String countInfo = selectedCount > 0
+                           ? (String(selectedCount) + "/" +
+                              String(files.size()) + " sel")
+                           : (String(files.size()) + " items");
     if (listTruncated) {
       // MAX_FILES_IN_LIST entries were listed and there were more; the old
       // build just stopped, with nothing on screen to say so.
@@ -361,41 +377,55 @@ void FileManager::createNewFolder() {
 
 // ==================== DELETE SELECTED ====================
 void FileManager::deleteSelected() {
-  if (files.empty() || selectedIndex >= files.size())
+  const std::vector<String> targets = targetPaths();
+  if (targets.empty())
     return;
 
-  FileEntry &entry = files[selectedIndex];
-  const String fullPath = entry.fullPath;
-
-  String message = "Delete \"" + UI::truncateString(entry.name, 18) + "\"?";
-  if (entry.isDirectory) {
-    // Deleting a folder is recursive, so say what is inside before doing it.
-    const int childCount = FileOps::countEntries(getCurrentFS(), fullPath);
-    if (childCount > 0) {
-      message = "Folder + " + String(childCount) + " items?";
+  // One confirmation for the batch, naming what is about to go.
+  String message;
+  if (targets.size() == 1) {
+    message = "Delete \"" +
+              UI::truncateString(FileOps::getFileName(targets[0]), 18) + "\"?";
+    if (FileOps::isDirectory(getCurrentFS(), targets[0])) {
+      const int childCount = FileOps::countEntries(getCurrentFS(), targets[0]);
+      if (childCount > 0) {
+        message = "Folder + " + String(childCount) + " items?";
+      }
     }
+  } else {
+    message = "Delete " + String(targets.size()) + " items?";
   }
 
   if (CONFIRM_DELETE && !UI::showConfirmDialog("Confirm Delete", message)) {
     return;
   }
 
-  bool success = false;
-  if (entry.isDirectory) {
-    success = FileOps::deleteDirectory(getCurrentFS(), fullPath);
-  } else {
-    success = FileOps::deleteFile(getCurrentFS(), fullPath);
+  int deleted = 0;
+  for (const String &path : targets) {
+    const bool isDir = FileOps::isDirectory(getCurrentFS(), path);
+    const bool ok = isDir ? FileOps::deleteDirectory(getCurrentFS(), path)
+                          : FileOps::deleteFile(getCurrentFS(), path);
+    if (ok) {
+      deleted++;
+      // A bookmark pointing at something that no longer exists would show up
+      // as a star on an unrelated file created later at the same path.
+      Bookmarks::remove(path);
+    }
   }
 
-  if (success) {
-    UI::showToast("Deleted", ACCENT_COLOR);
-    if (selectedIndex >= (int)files.size() - 1 && selectedIndex > 0) {
-      selectedIndex--;
-    }
-    refreshFileList();
+  if (deleted == (int)targets.size()) {
+    UI::showToast(String(deleted) + " deleted", ACCENT_COLOR);
+  } else if (deleted > 0) {
+    UI::showToast(String(deleted) + "/" + String(targets.size()) + " deleted",
+                  WARNING_COLOR);
   } else {
     UI::showToast("Delete failed", ERROR_COLOR);
   }
+
+  // Keep the cursor inside what will be left. refreshFileList() clamps the
+  // upper bound but not the lower one, so clamp here.
+  selectedIndex = max(0, selectedIndex - deleted);
+  refreshFileList();
 }
 
 // ==================== RENAME SELECTED ====================
@@ -425,6 +455,11 @@ void FileManager::renameSelected() {
   }
 
   if (FileOps::renameFile(getCurrentFS(), oldPath, newPath)) {
+    // Otherwise the star would stay behind on a path that no longer exists.
+    if (entry.bookmarked) {
+      Bookmarks::remove(oldPath);
+      Bookmarks::toggle(newPath);
+    }
     UI::showToast("Renamed", ACCENT_COLOR);
     refreshFileList();
   } else {
@@ -437,11 +472,13 @@ void FileManager::copySelected() {
   if (files.empty() || selectedIndex >= files.size())
     return;
 
-  clipboard.clear();
-  clipboard.push_back(files[selectedIndex].fullPath);
+  clipboard = targetPaths();
+  if (clipboard.empty()) {
+    return;
+  }
   clipboardOperation = OP_COPY;
 
-  UI::showToast("Copied to clipboard", ACCENT_COLOR);
+  UI::showToast(String(clipboard.size()) + " copied", ACCENT_COLOR);
 }
 
 // ==================== MOVE SELECTED ====================
@@ -449,11 +486,13 @@ void FileManager::moveSelected() {
   if (files.empty() || selectedIndex >= files.size())
     return;
 
-  clipboard.clear();
-  clipboard.push_back(files[selectedIndex].fullPath);
+  clipboard = targetPaths();
+  if (clipboard.empty()) {
+    return;
+  }
   clipboardOperation = OP_MOVE;
 
-  UI::showToast("Cut to clipboard", ACCENT_COLOR);
+  UI::showToast(String(clipboard.size()) + " cut", ACCENT_COLOR);
 }
 
 // ==================== PASTE FROM CLIPBOARD ====================
@@ -629,6 +668,78 @@ void FileManager::showFileProperties() {
   UI::pushCanvas();
 }
 
+// ==================== SELECTION ====================
+int FileManager::selectionCount() const {
+  int count = 0;
+  for (const FileEntry &entry : files) {
+    if (entry.selected) {
+      count++;
+    }
+  }
+  return count;
+}
+
+void FileManager::toggleSelection() {
+  if (files.empty() || selectedIndex >= (int)files.size()) {
+    return;
+  }
+  files[selectedIndex].selected = !files[selectedIndex].selected;
+  // Move on, so tapping Space repeatedly picks out a run of files.
+  navigateDown();
+}
+
+void FileManager::selectAll(bool select) {
+  for (FileEntry &entry : files) {
+    entry.selected = select;
+  }
+  UI::showToast(select ? (String(files.size()) + " selected") : String("Selection cleared"),
+                select ? ACCENT_COLOR : SECONDARY_COLOR);
+}
+
+std::vector<String> FileManager::targetPaths() const {
+  std::vector<String> paths;
+  for (const FileEntry &entry : files) {
+    if (entry.selected) {
+      paths.push_back(entry.fullPath);
+    }
+  }
+  // Nothing ticked means "the thing I am pointing at", which is how the app
+  // behaved before multi-selection existed.
+  if (paths.empty() && !files.empty() && selectedIndex < (int)files.size()) {
+    paths.push_back(files[selectedIndex].fullPath);
+  }
+  return paths;
+}
+
+// ==================== BOOKMARKS ====================
+void FileManager::toggleBookmark() {
+  if (files.empty() || selectedIndex >= (int)files.size()) {
+    return;
+  }
+
+  FileEntry &entry = files[selectedIndex];
+  if (!entry.bookmarked && Bookmarks::isFull()) {
+    UI::showToast("Bookmark list is full", ERROR_COLOR);
+    return;
+  }
+
+  const String path = entry.fullPath;
+  const bool nowBookmarked = Bookmarks::toggle(path);
+  UI::showToast(nowBookmarked ? "Bookmarked" : "Bookmark removed",
+                nowBookmarked ? ACCENT_COLOR : SECONDARY_COLOR);
+
+  // Re-listing re-reads the bookmark flags and re-sorts, which moves the entry
+  // to or from the top of the list. Keep the cursor on it.
+  refreshFileList();
+  for (int i = 0; i < (int)files.size(); i++) {
+    if (files[i].fullPath == path) {
+      selectedIndex = i;
+      ensureSelectionVisible();
+      break;
+    }
+  }
+}
+
 // ==================== SEARCH FILES ====================
 void FileManager::searchFiles() {
   String query = UI::showInputDialog("Search", "Find:");
@@ -712,6 +823,12 @@ void FileManager::handleKeyboard() {
         case 'x': moveSelected(); return;
         case 'v': pasteFromClipboard(); return;
         case 'p': showFileProperties(); return;
+        case 'b': toggleBookmark(); return;
+        case 'a':
+          // Toggle: a second Fn+A clears, which is what you want after a
+          // batch operation.
+          selectAll(selectionCount() != (int)files.size());
+          return;
         case 'm': enterMassStorage(); return;
         case 'o':
           // Settings. Re-sort afterwards: sort order and hidden-file
@@ -722,6 +839,13 @@ void FileManager::handleKeyboard() {
           return;
         default: break;
       }
+      continue;
+    }
+
+    // Space ticks the entry under the cursor. Operations then act on every
+    // ticked entry instead of just the one being pointed at.
+    if (event.text() == ' ') {
+      toggleSelection();
       continue;
     }
 
@@ -757,6 +881,7 @@ void FileManager::enterMassStorage() {
   }
 
   appMode = MODE_MASS_STORAGE;
+  StatusLed::setState(LED_STATE_USB);
   UI::clearScreen();
 
   massStorage.begin();

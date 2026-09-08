@@ -19,7 +19,8 @@
 enum SettingType {
   SETTING_BOOL,
   SETTING_INT,
-  SETTING_COLOR, // RGB565, stored in a uint16_t
+  SETTING_COLOR, // RGB565 screen colour, stored in a uint16_t
+  SETTING_RGB,   // 24-bit LED colour, stored in an int
   SETTING_ENUM,
 };
 
@@ -30,6 +31,7 @@ enum SettingCategory {
   CAT_EDITOR,
   CAT_KEYBOARD,
   CAT_SOUND,
+  CAT_LED,
   CAT_COUNT,
 };
 

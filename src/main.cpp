@@ -15,10 +15,12 @@
  */
 
 #include "Config.h"
+#include "Bookmarks.h"
 #include "Feedback.h"
 #include "FileManager.h"
 #include "Input.h"
 #include "Settings.h"
+#include "StatusLed.h"
 #include "UI.h"
 #include <M5Cardputer.h>
 
@@ -40,6 +42,7 @@ void setup() {
   M5Cardputer.begin(cfg, true); // Enable keyboard
   Input::begin();
   Feedback::begin();
+  StatusLed::begin();
 
   // Set display rotation
   M5Cardputer.Display.setRotation(1);
@@ -53,6 +56,7 @@ void setup() {
   const bool sdReady = FileManager::initStorage();
   if (sdReady) {
     Settings::load();
+    Bookmarks::load();
   }
 
   // Initialize UI
@@ -82,6 +86,7 @@ void setup() {
       UI::waitForAnyKey();
     }
     Settings::load();
+    Bookmarks::load();
   }
 
   if (!fileManager.init()) {
@@ -114,6 +119,9 @@ void loop() {
 
   // Update file manager
   fileManager.update();
+
+  // Expires the acknowledgement flash back to the steady colour.
+  StatusLed::update();
 
   // Repaint only when something changed. Pushing the 64,800-byte sprite
   // unconditionally at ~100Hz burnt the SPI bus and the battery for nothing.

@@ -1,5 +1,6 @@
 #include "FileOps.h"
 
+#include "Bookmarks.h"
 #include "Settings.h"
 
 #include <algorithm>
@@ -47,6 +48,7 @@ bool FileOps::listDirectory(fs::FS &fs, const String &path,
     entry.isDirectory = file.isDirectory();
     entry.size = file.size();
     entry.modified = file.getLastWrite();
+    entry.bookmarked = Bookmarks::isBookmarked(entry.fullPath);
 
     // Hidden entries used to be filtered unconditionally, with no way to see
     // them at all.
@@ -66,11 +68,18 @@ bool FileOps::listDirectory(fs::FS &fs, const String &path,
 }
 
 // ==================== SORT ENTRIES ====================
-// Directories always come first; SORT_DESCENDING reverses only the comparison
-// within each group, so folders never sink below files.
+// Bookmarks first, then directories, then files. SORT_DESCENDING reverses only
+// the comparison within the innermost group, so neither favourites nor folders
+// ever sink below plain files.
 void FileOps::sortEntries(std::vector<FileEntry> &files) {
   std::sort(files.begin(), files.end(),
             [](const FileEntry &a, const FileEntry &b) {
+              // Bookmarks outrank everything, including the folders-first rule
+              // and the reverse-order switch: the point of a favourite is that
+              // it is always at the top.
+              if (a.bookmarked != b.bookmarked) {
+                return a.bookmarked;
+              }
               if (a.isDirectory != b.isDirectory) {
                 return a.isDirectory;
               }
@@ -358,6 +367,9 @@ void FileOps::searchFiles(fs::FS &fs, const String &path, const String &query,
                           std::vector<FileEntry> &results) {
   results.clear();
   searchRecursive(fs, path, query, results, 0);
+  // Results arrive in walk order; apply the same ordering rules as a listing
+  // so bookmarks stay at the top here too.
+  sortEntries(results);
 }
 
 // ==================== SEARCH RECURSIVE ====================
@@ -398,6 +410,7 @@ void FileOps::searchRecursive(fs::FS &fs, const String &path,
         entry.isDirectory = childIsDir;
         entry.size = file.size();
         entry.modified = file.getLastWrite();
+        entry.bookmarked = Bookmarks::isBookmarked(childPath);
         results.push_back(entry);
       }
 

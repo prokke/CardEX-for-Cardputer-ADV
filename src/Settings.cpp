@@ -1,5 +1,7 @@
 #include "Settings.h"
 
+#include "StatusLed.h"
+
 #include <M5Cardputer.h>
 #include <SD.h>
 #include <vector>
@@ -38,6 +40,15 @@ bool SOUND_ENABLED = true;
 bool SOUND_KEY_CLICK = false;
 int SOUND_VOLUME = DEFAULT_SOUND_VOLUME;
 
+bool LED_ENABLED = true;
+int LED_BRIGHTNESS = DEFAULT_LED_BRIGHTNESS;
+int LED_COLOR_IDLE = DEFAULT_LED_COLOR_IDLE;
+int LED_COLOR_CLIPBOARD = DEFAULT_LED_COLOR_CLIPBOARD;
+int LED_COLOR_EDIT = DEFAULT_LED_COLOR_EDIT;
+int LED_COLOR_USB = DEFAULT_LED_COLOR_USB;
+int LED_COLOR_OK = DEFAULT_LED_COLOR_OK;
+int LED_COLOR_ERROR = DEFAULT_LED_COLOR_ERROR;
+
 bool SHOW_LINE_NUMBERS = true;
 bool AUTO_INDENT = true;
 bool TAB_USES_SPACES = true;
@@ -48,7 +59,8 @@ namespace {
 const char *const kSortNames[] = {"Name", "Size", "Date"};
 
 const char *const kCategoryNames[CAT_COUNT] = {
-    "Appearance", "Battery", "File manager", "Editor", "Keyboard", "Sound",
+    "Appearance", "Battery", "File manager", "Editor",
+    "Keyboard",   "Sound",   "Status LED",
 };
 
 // Fields in order: key, label, category, type, value, default, min, max, step,
@@ -126,6 +138,25 @@ const SettingDef kSettings[] = {
      0, 0, 1, 1, nullptr, 0},
     {"SOUND_VOLUME", "Volume", CAT_SOUND, SETTING_INT, &SOUND_VOLUME,
      DEFAULT_SOUND_VOLUME, 0, 255, 10, nullptr, 0},
+
+    // ---- Status LED ----
+    {"LED_ENABLED", "LED", CAT_LED, SETTING_BOOL, &LED_ENABLED, 1, 0, 1, 1,
+     nullptr, 0},
+    {"LED_BRIGHTNESS", "Brightness", CAT_LED, SETTING_INT, &LED_BRIGHTNESS,
+     DEFAULT_LED_BRIGHTNESS, 0, 255, 5, nullptr, 0},
+    {"LED_COLOR_IDLE", "Idle", CAT_LED, SETTING_RGB, &LED_COLOR_IDLE,
+     DEFAULT_LED_COLOR_IDLE, 0, 0xFFFFFF, 0x100010, nullptr, 0},
+    {"LED_COLOR_CLIPBOARD", "Clipboard", CAT_LED, SETTING_RGB,
+     &LED_COLOR_CLIPBOARD, DEFAULT_LED_COLOR_CLIPBOARD, 0, 0xFFFFFF, 0x100010,
+     nullptr, 0},
+    {"LED_COLOR_EDIT", "Unsaved edits", CAT_LED, SETTING_RGB, &LED_COLOR_EDIT,
+     DEFAULT_LED_COLOR_EDIT, 0, 0xFFFFFF, 0x100010, nullptr, 0},
+    {"LED_COLOR_USB", "USB mode", CAT_LED, SETTING_RGB, &LED_COLOR_USB,
+     DEFAULT_LED_COLOR_USB, 0, 0xFFFFFF, 0x100010, nullptr, 0},
+    {"LED_COLOR_OK", "Success flash", CAT_LED, SETTING_RGB, &LED_COLOR_OK,
+     DEFAULT_LED_COLOR_OK, 0, 0xFFFFFF, 0x100010, nullptr, 0},
+    {"LED_COLOR_ERROR", "Error flash", CAT_LED, SETTING_RGB, &LED_COLOR_ERROR,
+     DEFAULT_LED_COLOR_ERROR, 0, 0xFFFFFF, 0x100010, nullptr, 0},
 };
 
 constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
@@ -170,9 +201,13 @@ const SettingDef *findByKey(const String &key) {
 
 String formatForFile(const SettingDef &def) {
   const int32_t value = Settings::get(def);
+  char buffer[16];
   if (def.type == SETTING_COLOR) {
-    char buffer[16];
     snprintf(buffer, sizeof(buffer), "0x%04X", (unsigned)(value & 0xFFFF));
+    return String(buffer);
+  }
+  if (def.type == SETTING_RGB) {
+    snprintf(buffer, sizeof(buffer), "0x%06X", (unsigned)(value & 0xFFFFFF));
     return String(buffer);
   }
   return String((int)value);
@@ -195,7 +230,7 @@ int32_t Settings::get(const SettingDef &def) {
       return *static_cast<bool *>(def.value) ? 1 : 0;
     case SETTING_COLOR:
       return *static_cast<uint16_t *>(def.value);
-    default:
+    default: // SETTING_INT, SETTING_ENUM, SETTING_RGB
       return *static_cast<int *>(def.value);
   }
 }
@@ -237,6 +272,11 @@ String Settings::valueText(const SettingDef &def) {
       snprintf(buffer, sizeof(buffer), "0x%04X", (unsigned)(value & 0xFFFF));
       return String(buffer);
     }
+    case SETTING_RGB: {
+      char buffer[16];
+      snprintf(buffer, sizeof(buffer), "0x%06X", (unsigned)(value & 0xFFFFFF));
+      return String(buffer);
+    }
     case SETTING_ENUM:
       if (def.enumNames && value >= 0 && value < (int32_t)def.enumCount) {
         return String(def.enumNames[value]);
@@ -250,6 +290,7 @@ String Settings::valueText(const SettingDef &def) {
 void Settings::apply() {
   M5Cardputer.Display.setBrightness((uint8_t)SCREEN_BRIGHTNESS);
   M5Cardputer.Speaker.setVolume((uint8_t)SOUND_VOLUME);
+  StatusLed::applySettings();
 
   // A critical threshold above the warning one would make the warning colour
   // unreachable; keep them ordered rather than rejecting the user's input.
