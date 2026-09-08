@@ -636,6 +636,14 @@ void FileManager::handleKeyboard() {
 
 // ==================== ENTER MASS STORAGE ====================
 void FileManager::enterMassStorage() {
+  // While the host owns the card it writes raw sectors underneath our
+  // filesystem. Anything we have open would be working from a stale view, and
+  // unsaved edits would be lost by the remount below.
+  if (inEditor) {
+    UI::showToast("Close the editor first", WARNING_COLOR);
+    return;
+  }
+
   appMode = MODE_MASS_STORAGE;
   UI::clearScreen();
 
@@ -643,8 +651,19 @@ void FileManager::enterMassStorage() {
   massStorage.loop(); // Blocks until the user exits or the host ejects.
   massStorage.end();
 
+  // Remount. The host has very likely rewritten the FAT and directory sectors
+  // under us, so the mounted filesystem's cached view is stale; re-listing
+  // alone would show entries that no longer exist.
+  SD.end();
+  sdAvailable = SD.begin(SD_SPI_CS_PIN, SPI);
+  if (!sdAvailable) {
+    UI::showMessageDialog("Error", "SD remount failed");
+  }
+
   appMode = MODE_FILE_MANAGER;
-  // The host may have rewritten the FAT underneath us.
+  currentPath = "/"; // The path we were in may be gone.
+  selectedIndex = 0;
+  scrollOffset = 0;
   refreshFileList();
   Input::flush();
 }
