@@ -9,10 +9,19 @@
 // ==================== UNDO ACTION ====================
 struct UndoAction {
   enum Type { INSERT, DELETE, REPLACE } type;
-  int row, col;
+  int row = 0;
+  int col = 0;
   String text;
   String oldText;
+  // Actions sharing a non-zero group undo and redo as a single step. Replace
+  // All touches many lines and must not need one Fn+Z per line.
+  uint16_t group = 0;
 };
+
+// How the file being edited terminates its lines. Detected on open and
+// reproduced on save - the editor used to read CRLF and CR happily but always
+// wrote LF, silently rewriting every line ending in the file.
+enum EolStyle { EOL_LF, EOL_CRLF, EOL_CR };
 
 // ==================== TEXT EDITOR CLASS ====================
 class TextEditor {
@@ -73,6 +82,12 @@ private:
   String filePath;
   bool fileOpen;
   bool modified;
+  EolStyle eolStyle;
+  bool trailingNewline; // Whether the file ended with a line terminator.
+
+  // Running character count, maintained incrementally. render() used to sum
+  // every line on every frame just to print it.
+  size_t totalChars;
 
   // Text buffer
   std::vector<String> lines;
@@ -93,6 +108,7 @@ private:
   // Undo/Redo
   std::vector<UndoAction> undoStack;
   std::vector<UndoAction> redoStack;
+  uint16_t nextUndoGroup;
 
   // Search
   int lastSearchRow;
@@ -110,7 +126,10 @@ private:
   void ensureLineExists(int row);
   void adjustScroll();
   void addUndoAction(UndoAction::Type type, int row, int col,
-                     const String &text, const String &oldText = "");
+                     const String &text, const String &oldText = "",
+                     uint16_t group = 0);
+  void applyUndoAction(const UndoAction &action, bool reverse);
+  void recomputeTotalChars();
   void clearRedoStack();
   void drawCursor();
   int getVisibleLines() const;

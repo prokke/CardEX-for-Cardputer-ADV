@@ -16,8 +16,11 @@ TextEditor::TextEditor() {
   hasSelection = false;
   selStartRow = selStartCol = selEndRow = selEndCol = 0;
   lastSearchRow = lastSearchCol = 0;
-  lastSearchRow = lastSearchCol = 0;
   showLineNumbers = true;
+  eolStyle = EOL_LF;
+  trailingNewline = true;
+  totalChars = 0;
+  nextUndoGroup = 1;
 
   lastBatteryLevel = 0;
   lastBatteryCheck = 0;
@@ -27,6 +30,10 @@ TextEditor::TextEditor() {
 bool TextEditor::openFile(fs::FS &fs, const String &path) {
   File file = fs.open(path, FILE_READ);
   if (!file) {
+    return false;
+  }
+  if (file.isDirectory()) {
+    file.close();
     return false;
   }
 
@@ -43,49 +50,95 @@ bool TextEditor::openFile(fs::FS &fs, const String &path) {
   undoStack.clear();
   redoStack.clear();
 
-  // Read file line by line
-  String currentLine = "";
-  while (file.available()) {
-    char c = file.read();
-    
-    if (c == '\n') {
-      // Unix style or second char of Windows style
-      lines.push_back(currentLine);
-      currentLine = "";
-    } else if (c == '\r') {
-      // Mac style or first char of Windows style
-      // Peek next char to see if it's \n
-      if (file.peek() == '\n') {
-        // Windows style \r\n, handle on next iteration (the \n)
+  // Read in blocks. The old loop called file.read() once per byte and grew a
+  // String one character at a time, which is a reallocation per character - a
+  // 32KB file took seconds to open.
+  static uint8_t buffer[1024];
+  String currentLine;
+  currentLine.reserve(96);
+
+  bool pendingCR = false;      // Last byte was '\r'; a following '\n' pairs with it.
+  bool endedWithTerminator = false;
+  bool eolDetected = false;
+  bool binary = false;
+
+  while (file.available() && !binary) {
+    const size_t count = file.read(buffer, sizeof(buffer));
+    if (count == 0) {
+      break;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+      const char c = (char)buffer[i];
+
+      // A NUL byte means this is not text. Opening a binary file used to fill
+      // the editor with garbage, and saving it wrote that garbage back.
+      if (c == '\0') {
+        binary = true;
+        break;
+      }
+
+      if (c == '\r') {
+        if (!eolDetected) {
+          eolStyle = EOL_CR; // Upgraded to CRLF below if '\n' follows.
+        }
+        lines.push_back(currentLine);
+        currentLine = "";
+        pendingCR = true;
+        endedWithTerminator = true;
         continue;
       }
-      // Old Mac style \r only
-      lines.push_back(currentLine);
-      currentLine = "";
-    } else {
-      // Regular character
-      currentLine += c;
-    }
-  }
 
-  // Add last line if not empty or if file was empty
-  if (currentLine.length() > 0 || lines.size() == 0) {
-    if (lines.size() == 0 && currentLine.length() == 0 && fileSize > 0) {
-        // Avoid adding empty line for non-empty file if not needed, 
-        // but here we ensure at least one line exists.
-        lines.push_back("");
-    } else {
-        lines.push_back(currentLine);
+      if (c == '\n') {
+        if (pendingCR) {
+          // The line was already pushed when the '\r' arrived.
+          if (!eolDetected) {
+            eolStyle = EOL_CRLF;
+          }
+          pendingCR = false;
+        } else {
+          if (!eolDetected) {
+            eolStyle = EOL_LF;
+          }
+          lines.push_back(currentLine);
+          currentLine = "";
+        }
+        eolDetected = true;
+        endedWithTerminator = true;
+        continue;
+      }
+
+      if (pendingCR) {
+        pendingCR = false;
+        eolDetected = true; // A lone '\r' really was the terminator.
+      }
+      currentLine += c;
+      endedWithTerminator = false;
     }
   }
 
   file.close();
+
+  if (binary) {
+    lines.clear();
+    UI::showMessageDialog("Error", "Binary file");
+    return false;
+  }
+
+  trailingNewline = endedWithTerminator && fileSize > 0;
+  if (!endedWithTerminator) {
+    lines.push_back(currentLine);
+  }
+  if (lines.empty()) {
+    lines.push_back("");
+  }
 
   // Initialize state
   fileSystem = &fs;
   filePath = path;
   fileOpen = true;
   modified = false;
+  recomputeTotalChars();
 
   // Initial battery check
   lastBatteryLevel = M5Cardputer.Power.getBatteryLevel();
@@ -105,21 +158,64 @@ bool TextEditor::saveFile() {
     return false;
   }
 
-  File file = fileSystem->open(filePath, FILE_WRITE);
+  // Write to a sibling temp file and swap it in. Opening the real file with
+  // FILE_WRITE truncates it first, so a failure part-way through - a full
+  // card, a yanked card, a flat battery - destroyed the original and still
+  // reported "File saved", because no write result was ever checked.
+  const String tempPath = filePath + ".tmp";
+  fileSystem->remove(tempPath);
+
+  File file = fileSystem->open(tempPath, FILE_WRITE);
   if (!file) {
     UI::showToast("Save failed!", ERROR_COLOR);
     return false;
   }
 
-  // Write all lines
-  for (int i = 0; i < lines.size(); i++) {
-    file.print(lines[i]);
-    if (i < lines.size() - 1) {
-      file.print("\n");
+  const char *eol =
+      (eolStyle == EOL_CRLF) ? "\r\n" : (eolStyle == EOL_CR ? "\r" : "\n");
+  const size_t eolLen = strlen(eol);
+
+  size_t expected = 0;
+  bool ok = true;
+
+  for (size_t i = 0; i < lines.size() && ok; i++) {
+    const String &line = lines[i];
+    if (line.length() > 0 && file.print(line) != line.length()) {
+      ok = false;
+      break;
+    }
+    expected += line.length();
+
+    // Reproduce the file's original trailing-newline behaviour instead of
+    // always dropping it.
+    const bool needsEol = (i + 1 < lines.size()) || trailingNewline;
+    if (needsEol) {
+      if (file.print(eol) != eolLen) {
+        ok = false;
+        break;
+      }
+      expected += eolLen;
     }
   }
 
+  file.flush();
+  const size_t written = file.size();
   file.close();
+
+  if (!ok || written != expected) {
+    fileSystem->remove(tempPath);
+    UI::showToast("Save failed - file intact", ERROR_COLOR);
+    return false;
+  }
+
+  // Swap. If power is lost between these two calls the data survives in the
+  // .tmp file, which is strictly better than a truncated original.
+  fileSystem->remove(filePath);
+  if (!fileSystem->rename(tempPath, filePath)) {
+    UI::showToast("Save failed - see .tmp", ERROR_COLOR);
+    return false;
+  }
+
   modified = false;
   UI::showToast("File saved", ACCENT_COLOR);
   return true;
@@ -146,7 +242,7 @@ void TextEditor::insertChar(char c) {
   String oldLine = line;
 
   // Insert character
-  if (cursorCol >= line.length()) {
+  if (cursorCol >= (int)line.length()) {
     line += c;
   } else {
     line = line.substring(0, cursorCol) + String(c) + line.substring(cursorCol);
@@ -155,6 +251,7 @@ void TextEditor::insertChar(char c) {
   addUndoAction(UndoAction::INSERT, cursorRow, cursorCol, String(c), "");
 
   cursorCol++;
+  totalChars++;
   modified = true;
   ensureCursorInBounds();
 }
@@ -169,12 +266,13 @@ void TextEditor::deleteChar() {
     ensureLineExists(cursorRow);
     String &line = lines[cursorRow];
 
-    if (cursorCol <= line.length()) {
+    if (cursorCol <= (int)line.length()) {
       char deletedChar = line[cursorCol - 1];
       line = line.substring(0, cursorCol - 1) + line.substring(cursorCol);
       addUndoAction(UndoAction::DELETE, cursorRow, cursorCol - 1,
                     String(deletedChar), "");
       cursorCol--;
+      if (totalChars > 0) totalChars--;
       modified = true;
     }
   } else if (cursorRow > 0) {
@@ -205,14 +303,15 @@ void TextEditor::deleteCharForward() {
   ensureLineExists(cursorRow);
   String &line = lines[cursorRow];
 
-  if (cursorCol < line.length()) {
+  if (cursorCol < (int)line.length()) {
     // Delete character at cursor
     char deletedChar = line[cursorCol];
     line = line.substring(0, cursorCol) + line.substring(cursorCol + 1);
     addUndoAction(UndoAction::DELETE, cursorRow, cursorCol, String(deletedChar),
                   "");
+    if (totalChars > 0) totalChars--;
     modified = true;
-  } else if (cursorRow < lines.size() - 1) {
+  } else if (cursorRow < (int)lines.size() - 1) {
     // Merge with next line
     String nextLine = lines[cursorRow + 1];
     line += nextLine;
@@ -264,7 +363,8 @@ void TextEditor::moveCursorUp() {
 }
 
 void TextEditor::moveCursorDown() {
-  if (cursorRow < lines.size() - 1) {
+  // (int) matters: on an empty buffer lines.size() - 1 is SIZE_MAX.
+  if (cursorRow < (int)lines.size() - 1) {
     cursorRow++;
     ensureCursorInBounds();
     adjustScroll();
@@ -284,9 +384,9 @@ void TextEditor::moveCursorLeft() {
 
 void TextEditor::moveCursorRight() {
   ensureLineExists(cursorRow);
-  if (cursorCol < lines[cursorRow].length()) {
+  if (cursorCol < (int)lines[cursorRow].length()) {
     cursorCol++;
-  } else if (cursorRow < lines.size() - 1) {
+  } else if (cursorRow < (int)lines.size() - 1) {
     cursorRow++;
     cursorCol = 0;
     adjustScroll();
@@ -313,94 +413,97 @@ void TextEditor::moveCursorToFileEnd() {
   adjustScroll();
 }
 
-// ==================== UNDO ====================
+// ==================== UNDO / REDO ====================
+// Applies one action. `reverse` undoes it, otherwise it replays it. Every
+// vector access is bounds-checked: the old code indexed lines[action.row]
+// directly, and Replace All rewrote lines without recording anything, so the
+// stack could hold rows that no longer existed and Fn+Z crashed.
+void TextEditor::applyUndoAction(const UndoAction &action, bool reverse) {
+  if (action.row < 0 || action.row >= (int)lines.size()) {
+    return;
+  }
+
+  const bool isInsert = (action.type == UndoAction::INSERT);
+  // Undoing an insert removes text; redoing one adds it. Deletes are the
+  // mirror image, so one flag decides which half runs.
+  const bool addText = isInsert ? !reverse : reverse;
+
+  if (action.type == UndoAction::REPLACE) {
+    lines[action.row] = reverse ? action.oldText : action.text;
+    cursorRow = action.row;
+    cursorCol = 0;
+    modified = true;
+    return;
+  }
+
+  if (action.text == "\n" || action.text.startsWith("\n")) {
+    // A line split or a line join.
+    if (addText) {
+      const int col = constrain(action.col, 0, (int)lines[action.row].length());
+      const String tail = (action.text == "\n") ? lines[action.row].substring(col)
+                                                : action.text.substring(1);
+      lines[action.row] = lines[action.row].substring(0, col);
+      lines.insert(lines.begin() + action.row + 1, tail);
+      cursorRow = action.row + 1;
+      cursorCol = 0;
+    } else if (action.row + 1 < (int)lines.size()) {
+      lines[action.row] += lines[action.row + 1];
+      lines.erase(lines.begin() + action.row + 1);
+      cursorRow = action.row;
+      cursorCol = constrain(action.col, 0, (int)lines[action.row].length());
+    }
+    modified = true;
+    return;
+  }
+
+  String &line = lines[action.row];
+  const int col = constrain(action.col, 0, (int)line.length());
+
+  if (addText) {
+    line = line.substring(0, col) + action.text + line.substring(col);
+    cursorRow = action.row;
+    cursorCol = col + action.text.length();
+  } else {
+    const int endCol =
+        constrain(col + (int)action.text.length(), col, (int)line.length());
+    line = line.substring(0, col) + line.substring(endCol);
+    cursorRow = action.row;
+    cursorCol = col;
+  }
+  modified = true;
+}
+
 void TextEditor::undo() {
   if (undoStack.empty())
     return;
 
-  UndoAction action = undoStack.back();
-  undoStack.pop_back();
+  const uint16_t group = undoStack.back().group;
+  do {
+    UndoAction action = undoStack.back();
+    undoStack.pop_back();
+    applyUndoAction(action, true);
+    redoStack.push_back(action);
+    // Grouped actions (Replace All) undo as one step.
+  } while (group != 0 && !undoStack.empty() && undoStack.back().group == group);
 
-  // Perform reverse action
-  if (action.type == UndoAction::INSERT) {
-    // Remove inserted text
-    if (action.text == "\n") {
-      // Remove newline
-      if (action.row < lines.size() - 1) {
-        lines[action.row] += lines[action.row + 1];
-        lines.erase(lines.begin() + action.row + 1);
-      }
-    } else {
-      // Remove characters
-      String &line = lines[action.row];
-      line = line.substring(0, action.col) +
-             line.substring(action.col + action.text.length());
-    }
-    cursorRow = action.row;
-    cursorCol = action.col;
-  } else if (action.type == UndoAction::DELETE) {
-    // Restore deleted text
-    if (action.text.startsWith("\n")) {
-      // Restore newline
-      String restOfLine = lines[action.row].substring(action.col);
-      lines[action.row] = lines[action.row].substring(0, action.col);
-      lines.insert(lines.begin() + action.row + 1, action.text.substring(1));
-      cursorRow = action.row + 1;
-      cursorCol = 0;
-    } else {
-      // Restore characters
-      String &line = lines[action.row];
-      line = line.substring(0, action.col) + action.text +
-             line.substring(action.col);
-      cursorRow = action.row;
-      cursorCol = action.col + action.text.length();
-    }
-  }
-
-  redoStack.push_back(action);
+  recomputeTotalChars();
   ensureCursorInBounds();
   adjustScroll();
 }
 
-// ==================== REDO ====================
 void TextEditor::redo() {
   if (redoStack.empty())
     return;
 
-  UndoAction action = redoStack.back();
-  redoStack.pop_back();
+  const uint16_t group = redoStack.back().group;
+  do {
+    UndoAction action = redoStack.back();
+    redoStack.pop_back();
+    applyUndoAction(action, false);
+    undoStack.push_back(action);
+  } while (group != 0 && !redoStack.empty() && redoStack.back().group == group);
 
-  // Perform action again
-  if (action.type == UndoAction::INSERT) {
-    if (action.text == "\n") {
-      String restOfLine = lines[action.row].substring(action.col);
-      lines[action.row] = lines[action.row].substring(0, action.col);
-      lines.insert(lines.begin() + action.row + 1, restOfLine);
-      cursorRow = action.row + 1;
-      cursorCol = 0;
-    } else {
-      String &line = lines[action.row];
-      line = line.substring(0, action.col) + action.text +
-             line.substring(action.col);
-      cursorRow = action.row;
-      cursorCol = action.col + action.text.length();
-    }
-  } else if (action.type == UndoAction::DELETE) {
-    if (action.text.startsWith("\n")) {
-      if (action.row < lines.size() - 1) {
-        lines[action.row] += lines[action.row + 1];
-        lines.erase(lines.begin() + action.row + 1);
-      }
-    } else {
-      String &line = lines[action.row];
-      line = line.substring(0, action.col) +
-             line.substring(action.col + action.text.length());
-    }
-    cursorRow = action.row;
-    cursorCol = action.col;
-  }
-
-  undoStack.push_back(action);
+  recomputeTotalChars();
   ensureCursorInBounds();
   adjustScroll();
 }
@@ -416,7 +519,7 @@ bool TextEditor::findText(const String &query, bool fromStart) {
   String lowerQuery = query;
   lowerQuery.toLowerCase();
 
-  for (int i = startRow; i < lines.size(); i++) {
+  for (int i = startRow; i < (int)lines.size(); i++) {
     String lowerLine = lines[i];
     lowerLine.toLowerCase();
 
@@ -446,12 +549,24 @@ int TextEditor::replaceText(const String &find, const String &replace,
   String lowerFind = find;
   lowerFind.toLowerCase();
 
-  for (int i = 0; i < lines.size(); i++) {
+  // One group for the whole operation, so a Replace All undoes in a single
+  // Fn+Z. Previously nothing was recorded at all: the replacement could not be
+  // undone, and the stale rows left on the undo stack could crash a later undo.
+  const uint16_t group = nextUndoGroup++;
+  if (nextUndoGroup == 0) {
+    nextUndoGroup = 1; // 0 means "not grouped".
+  }
+
+  for (size_t i = 0; i < lines.size(); i++) {
     String &line = lines[i];
+    const String originalLine = line;
+
     String lowerLine = line;
     lowerLine.toLowerCase();
 
     int pos = 0;
+    bool lineChanged = false;
+
     while ((pos = lowerLine.indexOf(lowerFind, pos)) >= 0) {
       line = line.substring(0, pos) + replace +
              line.substring(pos + find.length());
@@ -459,17 +574,25 @@ int TextEditor::replaceText(const String &find, const String &replace,
       lowerLine.toLowerCase();
 
       count++;
+      lineChanged = true;
       pos += replace.length();
 
       if (!replaceAll) {
-        modified = true;
-        return count;
+        break;
       }
+    }
+
+    if (lineChanged) {
+      addUndoAction(UndoAction::REPLACE, (int)i, 0, line, originalLine, group);
+    }
+    if (count > 0 && !replaceAll) {
+      break;
     }
   }
 
   if (count > 0) {
     modified = true;
+    recomputeTotalChars();
   }
 
   return count;
@@ -480,7 +603,7 @@ void TextEditor::selectAll() {
   hasSelection = true;
   selStartRow = 0;
   selStartCol = 0;
-  selEndRow = lines.size() - 1;
+  selEndRow = (int)lines.size() - 1;
   ensureLineExists(selEndRow);
   selEndCol = lines[selEndRow].length();
 }
@@ -492,7 +615,7 @@ void TextEditor::copySelection() {
 
   clipboard = "";
   for (int i = selStartRow; i <= selEndRow; i++) {
-    if (i >= lines.size())
+    if (i >= (int)lines.size())
       break;
 
     int startCol = (i == selStartRow) ? selStartCol : 0;
@@ -538,9 +661,6 @@ void TextEditor::render() {
   if (modified)
     headerText += " *";
 
-  if (modified)
-    headerText += " *";
-
   UI::drawHeader(headerText, true, lastBatteryLevel);
 
   // Content area
@@ -548,7 +668,7 @@ void TextEditor::render() {
   int y = HEADER_HEIGHT + 2;
   int lineNumWidth = showLineNumbers ? 20 : 0;
 
-  for (int i = 0; i < visibleLines && (i + scrollRow) < lines.size(); i++) {
+  for (int i = 0; i < visibleLines && (i + scrollRow) < (int)lines.size(); i++) {
     int lineIndex = i + scrollRow;
 
     // Clear line background on canvas
@@ -564,7 +684,7 @@ void TextEditor::render() {
     // Line text with horizontal scrolling
     UI::canvas.setTextColor(TEXT_COLOR, BG_COLOR);
     String displayLine = lines[lineIndex];
-    int maxChars = (SCREEN_WIDTH - lineNumWidth - 4) / CHAR_WIDTH;
+    const int maxChars = (SCREEN_WIDTH - lineNumWidth - 4) / CHAR_WIDTH;
 
     // Horizontal scroll calculation
     int scrollCol = 0;
@@ -575,9 +695,9 @@ void TextEditor::render() {
     }
 
     // Extract visible portion
-    if (displayLine.length() > scrollCol) {
+    if ((int)displayLine.length() > scrollCol) {
       displayLine = displayLine.substring(scrollCol);
-      if (displayLine.length() > maxChars) {
+      if ((int)displayLine.length() > maxChars) {
         displayLine = displayLine.substring(0, maxChars);
       }
     } else {
@@ -611,11 +731,7 @@ void TextEditor::render() {
       "Ln " + String(cursorRow + 1) + ", Col " + String(cursorCol + 1);
   UI::canvas.drawString(posInfo, 2, infoY);
 
-  int totalChars = 0;
-  for (const String &line : lines) {
-    totalChars += line.length();
-  }
-  String sizeInfo = String(totalChars) + " chars";
+  String sizeInfo = String((unsigned)totalChars) + " chars";
   int sizeX = SCREEN_WIDTH - (sizeInfo.length() * CHAR_WIDTH) - 2;
   UI::canvas.drawString(sizeInfo, sizeX, infoY);
 
@@ -644,14 +760,14 @@ void TextEditor::ensureCursorInBounds() {
     lines.push_back("");
   }
 
-  cursorRow = constrain(cursorRow, 0, lines.size() - 1);
+  cursorRow = constrain(cursorRow, 0, (int)lines.size() - 1);
   ensureLineExists(cursorRow);
-  cursorCol = constrain(cursorCol, 0, lines[cursorRow].length());
+  cursorCol = constrain(cursorCol, 0, (int)lines[cursorRow].length());
 }
 
 // ==================== ENSURE LINE EXISTS ====================
 void TextEditor::ensureLineExists(int row) {
-  while (row >= lines.size()) {
+  while (row >= (int)lines.size()) {
     lines.push_back("");
   }
 }
@@ -671,22 +787,41 @@ void TextEditor::adjustScroll() {
 
 // ==================== ADD UNDO ACTION ====================
 void TextEditor::addUndoAction(UndoAction::Type type, int row, int col,
-                               const String &text, const String &oldText) {
+                               const String &text, const String &oldText,
+                               uint16_t group) {
   UndoAction action;
   action.type = type;
   action.row = row;
   action.col = col;
   action.text = text;
   action.oldText = oldText;
+  action.group = group;
 
   undoStack.push_back(action);
 
-  // Limit undo stack size
-  if (undoStack.size() > MAX_UNDO_LEVELS) {
+  // Limit undo stack size. The cast matters: MAX_UNDO_LEVELS is an int, and an
+  // unsigned comparison against a negative value never trims.
+  const size_t limit = MAX_UNDO_LEVELS > 0 ? (size_t)MAX_UNDO_LEVELS : 1;
+  while (undoStack.size() > limit) {
+    // Drop whole groups, never half of one.
+    const uint16_t oldestGroup = undoStack.front().group;
     undoStack.erase(undoStack.begin());
+    if (oldestGroup != 0) {
+      while (!undoStack.empty() && undoStack.front().group == oldestGroup) {
+        undoStack.erase(undoStack.begin());
+      }
+    }
   }
 
   clearRedoStack();
+}
+
+// ==================== RECOMPUTE TOTAL CHARS ====================
+void TextEditor::recomputeTotalChars() {
+  totalChars = 0;
+  for (const String &line : lines) {
+    totalChars += line.length();
+  }
 }
 
 // ==================== CLEAR REDO STACK ====================
