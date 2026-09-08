@@ -59,12 +59,6 @@ public:
   int replaceText(const String &find, const String &replace,
                   bool replaceAll = false);
 
-  // Selection
-  void selectAll();
-  void copySelection();
-  void cutSelection();
-  void paste();
-
   // Display
   void render();
   // Returns true when something changed that the caller must repaint - the
@@ -100,12 +94,6 @@ private:
   int scrollRow;
   unsigned long lastBlinkTime;
   bool cursorVisible;
-
-  // Selection
-  bool hasSelection;
-  int selStartRow, selStartCol;
-  int selEndRow, selEndCol;
-  String clipboard;
 
   // Undo/Redo
   std::vector<UndoAction> undoStack;

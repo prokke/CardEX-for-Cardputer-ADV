@@ -29,6 +29,7 @@ enum SettingCategory {
   CAT_MANAGER,
   CAT_EDITOR,
   CAT_KEYBOARD,
+  CAT_SOUND,
   CAT_COUNT,
 };
 

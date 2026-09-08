@@ -313,16 +313,6 @@ bool FileOps::fileExists(fs::FS &fs, const String &path) {
   return fs.exists(path);
 }
 
-// ==================== GET FILE SIZE ====================
-size_t FileOps::getFileSize(fs::FS &fs, const String &path) {
-  File file = fs.open(path);
-  if (!file)
-    return 0;
-  size_t size = file.size();
-  file.close();
-  return size;
-}
-
 // ==================== FORMAT BYTES ====================
 String FileOps::formatBytes(uint64_t bytes) {
   return toArduino(PathUtils::formatBytes(bytes));

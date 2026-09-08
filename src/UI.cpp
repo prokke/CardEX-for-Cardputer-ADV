@@ -1,5 +1,7 @@
 #include "UI.h"
 
+#include "Feedback.h"
+
 // Static variables
 M5Canvas UI::canvas(&M5Cardputer.Display);
 unsigned long UI::toastStartTime = 0;
@@ -413,45 +415,6 @@ void UI::waitForAnyKey() {
   Input::flush();
 }
 
-// ==================== SHOW PROGRESS BAR ====================
-void UI::showProgressBar(const String &operation, int percent,
-                         const String &details) {
-  int boxW = 200;
-  int boxH = 60;
-  int boxX = (SCREEN_WIDTH - boxW) / 2;
-  int boxY = (SCREEN_HEIGHT - boxH) / 2;
-
-  canvas.fillRect(boxX, boxY, boxW, boxH, MENU_BG);
-  canvas.drawRect(boxX, boxY, boxW, boxH, ACCENT_COLOR);
-
-  // Operation
-  canvas.setTextColor(ACCENT_COLOR, MENU_BG);
-  drawCenteredText(operation, boxY + 5, ACCENT_COLOR);
-
-  // Progress bar
-  int barW = boxW - 20;
-  int barH = 12;
-  int barX = boxX + 10;
-  int barY = boxY + 25;
-
-  canvas.drawRect(barX, barY, barW, barH, BORDER_COLOR);
-  int fillW = (barW - 4) * percent / 100;
-  canvas.fillRect(barX + 2, barY + 2, fillW, barH - 4, ACCENT_COLOR);
-
-  // Percentage
-  canvas.setTextColor(TEXT_COLOR, MENU_BG);
-  String percentStr = String(percent) + "%";
-  drawCenteredText(percentStr, boxY + 40, TEXT_COLOR);
-
-  // Details
-  if (details.length() > 0) {
-    canvas.setTextColor(SECONDARY_COLOR, MENU_BG);
-    drawCenteredText(truncateString(details, 30), boxY + 50, SECONDARY_COLOR);
-  }
-
-  pushCanvas(); // Show progress
-}
-
 // ==================== SHOW HELP MENU ====================
 void UI::showHelpMenu(bool isEditorMode) {
   Input::flush();
@@ -517,16 +480,19 @@ void UI::showToast(const String &message, uint16_t color) {
   toastColor = color;
   toastStartTime = millis();
   toastActive = true;
+
+  // The colour already says whether this went well, so the tone follows it
+  // rather than needing every call site to pick one.
+  if (color == ERROR_COLOR) {
+    Feedback::error();
+  } else if (color == ACCENT_COLOR) {
+    Feedback::confirm();
+  }
   // Does not push, will be shown on next render
 }
 
 // ==================== CLEAR SCREEN ====================
 void UI::clearScreen() { canvas.fillScreen(BG_COLOR); }
-
-// ==================== CLEAR CONTENT ====================
-void UI::clearContent() {
-  canvas.fillRect(0, HEADER_HEIGHT, SCREEN_WIDTH, CONTENT_HEIGHT, BG_COLOR);
-}
 
 // ==================== TRUNCATE STRING ====================
 String UI::truncateString(const String &str, int maxLen) {

@@ -33,9 +33,6 @@ public:
   static String showInputDialog(const String &title, const String &prompt,
                                 const String &defaultValue = "");
   static void showMessageDialog(const String &title, const String &message);
-  static void showProgressBar(const String &operation, int percent,
-                              const String &details = "");
-
   // Help menu
   static void showHelpMenu(bool isEditorMode);
 
@@ -50,7 +47,6 @@ public:
 
   // Utilities
   static void clearScreen();
-  static void clearContent();
   static String truncateString(const String &str, int maxLen);
   static void drawCenteredText(const String &text, int y,
                                uint16_t color = TEXT_COLOR);

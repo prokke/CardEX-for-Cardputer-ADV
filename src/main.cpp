@@ -15,6 +15,7 @@
  */
 
 #include "Config.h"
+#include "Feedback.h"
 #include "FileManager.h"
 #include "Input.h"
 #include "Settings.h"
@@ -38,6 +39,7 @@ void setup() {
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true); // Enable keyboard
   Input::begin();
+  Feedback::begin();
 
   // Set display rotation
   M5Cardputer.Display.setRotation(1);

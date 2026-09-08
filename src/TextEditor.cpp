@@ -14,8 +14,6 @@ TextEditor::TextEditor() {
   scrollRow = 0;
   lastBlinkTime = 0;
   cursorVisible = true;
-  hasSelection = false;
-  selStartRow = selStartCol = selEndRow = selEndCol = 0;
   lastSearchRow = lastSearchCol = 0;
   eolStyle = EOL_LF;
   trailingNewline = true;
@@ -147,7 +145,6 @@ bool TextEditor::openFile(fs::FS &fs, const String &path) {
   cursorRow = 0;
   cursorCol = 0;
   scrollRow = 0;
-  hasSelection = false;
   lastAutoSave = millis();
 
   return true;
@@ -371,7 +368,6 @@ void TextEditor::moveCursor(int dr, int dc) {
   cursorCol += dc;
   ensureCursorInBounds();
   adjustScroll();
-  hasSelection = false;
 }
 
 void TextEditor::moveCursorUp() {
@@ -616,57 +612,6 @@ int TextEditor::replaceText(const String &find, const String &replace,
   }
 
   return count;
-}
-
-// ==================== SELECT ALL ====================
-void TextEditor::selectAll() {
-  hasSelection = true;
-  selStartRow = 0;
-  selStartCol = 0;
-  selEndRow = (int)lines.size() - 1;
-  ensureLineExists(selEndRow);
-  selEndCol = lines[selEndRow].length();
-}
-
-// ==================== COPY SELECTION ====================
-void TextEditor::copySelection() {
-  if (!hasSelection)
-    return;
-
-  clipboard = "";
-  for (int i = selStartRow; i <= selEndRow; i++) {
-    if (i >= (int)lines.size())
-      break;
-
-    int startCol = (i == selStartRow) ? selStartCol : 0;
-    int endCol = (i == selEndRow) ? selEndCol : lines[i].length();
-
-    clipboard += lines[i].substring(startCol, endCol);
-    if (i < selEndRow) {
-      clipboard += "\n";
-    }
-  }
-}
-
-// ==================== CUT SELECTION ====================
-void TextEditor::cutSelection() {
-  copySelection();
-  // TODO: Implement deletion of selection
-  hasSelection = false;
-}
-
-// ==================== PASTE ====================
-void TextEditor::paste() {
-  if (clipboard.length() == 0)
-    return;
-
-  for (char c : clipboard) {
-    if (c == '\n') {
-      insertNewLine();
-    } else {
-      insertChar(c);
-    }
-  }
 }
 
 // ==================== RENDER ====================

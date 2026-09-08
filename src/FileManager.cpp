@@ -1,4 +1,5 @@
 #include "FileManager.h"
+#include "Feedback.h"
 #include "PathUtils.h"
 #include "Settings.h"
 #include "SettingsScreen.h"
@@ -57,6 +58,13 @@ bool FileManager::init() {
 // ==================== UPDATE ====================
 void FileManager::update() {
   renderRequested = false;
+
+  for (const KeyEvent &event : Input::events()) {
+    if (!event.repeat) {
+      Feedback::key();
+      break;
+    }
+  }
 
   // Update battery every 30 seconds
   if (millis() - lastBatteryCheck > 30000) {

@@ -97,6 +97,13 @@ extern bool CONFIRM_DELETE;
 extern int SORT_MODE;
 extern bool SORT_DESCENDING;
 
+// ==================== SOUND (ADV: ES8311 codec) ====================
+#define DEFAULT_SOUND_VOLUME 80
+
+extern bool SOUND_ENABLED;
+extern bool SOUND_KEY_CLICK;
+extern int SOUND_VOLUME;
+
 // ==================== CONFIG ====================
 #define CONFIG_FILE_PATH "/CardEX.ini"
 

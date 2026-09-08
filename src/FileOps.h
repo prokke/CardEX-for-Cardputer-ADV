@@ -70,7 +70,6 @@ public:
 
   // File info
   static bool fileExists(fs::FS &fs, const String &path);
-  static size_t getFileSize(fs::FS &fs, const String &path);
   static bool isDirectory(fs::FS &fs, const String &path);
   static String formatBytes(uint64_t bytes);
 

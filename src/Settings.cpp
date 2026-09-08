@@ -34,6 +34,10 @@ bool CONFIRM_DELETE = true;
 int SORT_MODE = SORT_NAME;
 bool SORT_DESCENDING = false;
 
+bool SOUND_ENABLED = true;
+bool SOUND_KEY_CLICK = false;
+int SOUND_VOLUME = DEFAULT_SOUND_VOLUME;
+
 bool SHOW_LINE_NUMBERS = true;
 bool AUTO_INDENT = true;
 bool TAB_USES_SPACES = true;
@@ -44,7 +48,7 @@ namespace {
 const char *const kSortNames[] = {"Name", "Size", "Date"};
 
 const char *const kCategoryNames[CAT_COUNT] = {
-    "Appearance", "Battery", "File manager", "Editor", "Keyboard",
+    "Appearance", "Battery", "File manager", "Editor", "Keyboard", "Sound",
 };
 
 // Fields in order: key, label, category, type, value, default, min, max, step,
@@ -114,6 +118,14 @@ const SettingDef kSettings[] = {
      &KEY_REPEAT_DELAY, DEFAULT_KEY_REPEAT_DELAY, 100, 2000, 50, nullptr, 0},
     {"KEY_REPEAT_RATE", "Repeat rate ms", CAT_KEYBOARD, SETTING_INT,
      &KEY_REPEAT_RATE, DEFAULT_KEY_REPEAT_RATE, 20, 1000, 10, nullptr, 0},
+
+    // ---- Sound ----
+    {"SOUND_ENABLED", "Sounds", CAT_SOUND, SETTING_BOOL, &SOUND_ENABLED, 1, 0,
+     1, 1, nullptr, 0},
+    {"SOUND_KEY_CLICK", "Key click", CAT_SOUND, SETTING_BOOL, &SOUND_KEY_CLICK,
+     0, 0, 1, 1, nullptr, 0},
+    {"SOUND_VOLUME", "Volume", CAT_SOUND, SETTING_INT, &SOUND_VOLUME,
+     DEFAULT_SOUND_VOLUME, 0, 255, 10, nullptr, 0},
 };
 
 constexpr size_t kSettingCount = sizeof(kSettings) / sizeof(kSettings[0]);
@@ -237,6 +249,7 @@ String Settings::valueText(const SettingDef &def) {
 
 void Settings::apply() {
   M5Cardputer.Display.setBrightness((uint8_t)SCREEN_BRIGHTNESS);
+  M5Cardputer.Speaker.setVolume((uint8_t)SOUND_VOLUME);
 
   // A critical threshold above the warning one would make the warning colour
   // unreachable; keep them ordered rather than rejecting the user's input.

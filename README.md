@@ -1,95 +1,170 @@
-# CardEX - File Manager & Text Editor for M5Stack Cardputer
+# CardEX — File Manager & Text Editor for M5Stack Cardputer ADV
 
-CardEX is a powerful, native file manager and text editor designed specifically for the M5Stack Cardputer. It provides a desktop-like experience for managing files on the SD card, along with a full-featured text editor for on-the-go coding and note-taking.
+CardEX is a native file manager and text editor for the M5Stack Cardputer ADV. It gives you a
+desktop-like way to manage the SD card, plus an editor, image and hex viewers, and USB mass
+storage — all from the device itself.
 
 ---
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Platform](https://img.shields.io/badge/platform-M5Stack-orange.svg)
-![Status](https://img.shields.io/badge/status-stable-green.svg)
+![Platform](https://img.shields.io/badge/platform-Cardputer%20ADV-orange.svg)
+![Library](https://img.shields.io/badge/M5Cardputer-%E2%89%A5%201.2.0-informational.svg)
+
+## ⚠️ Library version
+
+**M5Cardputer 1.2.0 or newer is required.** The keyboard API changed incompatibly in 1.2.0:
+`KeysState::word` is left empty while `Fn` is held, and `del` moved from plain Backspace to
+`Fn+Backspace`. CardEX reads the raw key matrix (`Keyboard::keyList()`) instead, which works on
+every version, but the key map it relies on comes from the library — so the dependency is pinned
+in `platformio.ini` and should not be floated.
+
+If you build with an older M5Cardputer, expect the `Fn` shortcuts to misbehave.
 
 ## 🚀 Features
 
-### File Management
-- **SD Card Support:** Full management of files on the SD card.
-- **Full Operations:** Copy, Move, Rename, Delete, and Create new files/folders.
-- **Search:** Recursive file search to quickly find what you need.
-- **Mass Storage Mode:** Connect to a PC via USB to manage SD card files directly (`Fn+M`).
-- **Properties:** View detailed file information (Size, Path).
+### File management
+- **Browse, create, rename, delete** files and folders on the SD card.
+- **Copy, cut and paste**, including whole folders.
+- **Recursive search** by name, with results you can open directly.
+- **Sorting** by name, size or date, ascending or descending; optional hidden files.
+- **USB mass storage** (`Fn+M`) — mount the card on a PC. The card is remounted on exit.
+- **Properties** — name, size, type, location.
 
-### Text Editor
-- **File Support:** Edit files up to 32KB.
-- **Search & Replace:** Full find and replace functionality.
-- **Undo/Redo:** Multiple undo steps supported.
-- **Line Numbers:** Toggleable line numbering.
+### Viewers
+Files open according to what they are:
 
-### User Interface
-- **Visual Feedback:** Toast notifications for actions and errors.
-- **Customization:** Customizable color theme.
-- **Context Help:** Built-in shortcut reference (`Opt` key).
+| Type | Opens in |
+|------|----------|
+| `.bmp` `.jpg` `.png` `.qoi` | Image viewer — fit to screen, zoom and pan |
+| Text under 32KB | Editor |
+| Text over 32KB | Read-only pager (no size limit) |
+| Anything else | Hex viewer (no size limit) |
+
+### Text editor
+- Files up to 32KB, with find, replace and multi-level undo/redo.
+- Atomic saves: writes to a temp file and swaps it in, so a failure cannot destroy the original.
+- Preserves the file's original line endings (LF, CRLF or CR) and trailing newline.
+- Auto-indent, configurable tab width, optional autosave, line numbers.
+
+### Settings
+Everything is editable on the device (`Fn+O`) and stored in `/CardEX.ini` — colours, brightness,
+battery thresholds, sort order, editor behaviour, key repeat and sounds. Values are range-checked
+on load, so a hand-edited file cannot leave the app unusable.
 
 ## 🎮 Controls
 
-CardEX optimizes the Cardputer's keyboard for navigation. Note that the physical arrow keys (`;`, `.`, `,`, `/`) are used for navigation by default.
+Navigation stays on the bare `;` `.` `,` `/` keys. The `Fn` layer of those four keys types the
+characters instead.
 
----
-
-### Global Shortcuts
+### Global
 | Key | Action |
 |-----|--------|
-| `Opt` | Show Fullscreen Help |
-| `Fn + M` | **USB Mass Storage Mode** |
+| `Opt` | Full-screen help |
+| `Esc` (`Fn`+`` ` ``) | Cancel / go back |
 
-### File Manager
+### File manager
 | Key | Action |
 |-----|--------|
-| `;` (Up) | Move Selection Up |
-| `.` (Down) | Move Selection Down |
-| `Enter` | Open File / Enter Folder |
-| `Del` / `Backspace` | Go Back / Parent Folder |
-| `Fn + N` | New File / Folder Dialog |
-| `Fn + C` | Copy Selected |
-| `Fn + X` | Cut (Move) Selected |
-| `Fn + V` | Paste |
-| `Fn + D` | Delete Selected |
-| `Fn + R` | Rename Selected |
-| `Fn + F` | Search Files |
-| `Fn + P` | View Properties |
+| `;` / `.` | Move selection up / down |
+| `,` / `/` | Parent folder / open |
+| `Enter` | Open file or folder |
+| `Backspace` | Parent folder |
+| `Fn+N` | New file or folder |
+| `Fn+C` / `Fn+X` / `Fn+V` | Copy / cut / paste |
+| `Fn+D` / `Fn+R` | Delete / rename |
+| `Fn+F` | Search (recursive) |
+| `Fn+P` | Properties |
+| `Fn+O` | Settings |
+| `Fn+M` | USB mass storage |
+| `Fn+H` | Help |
 
-### Text Editor
+### Text editor
 | Key | Action |
 |-----|--------|
-| `;` / `.` | Move Cursor Up / Down |
-| `,` / `/` | Move Cursor Left / Right |
-| `Ctrl` + `key` | Type `;` `.` `,` `/` characters |
-| `Fn + S` | Save File |
-| `Fn + Q` | Quit (Prompts save) |
-| `Fn + F` | Find Text |
-| `Fn + R` | Replace Text |
-| `Fn + Z` | Undo |
-| `Fn + Y` | Redo |
-| `Enter` | New Line |
+| `;` `.` `,` `/` | Move cursor |
+| `Fn+;` `Fn+.` `Fn+,` `Fn+/` | Type `;` `.` `,` `/` |
+| `Backspace` / `Fn+Backspace` | Delete back / forward |
+| `Tab` | Indent |
+| `Enter` | New line |
+| `Fn+S` / `Fn+Q` | Save / quit |
+| `Fn+F` / `Fn+R` | Find / replace |
+| `Fn+Z` / `Fn+Y` | Undo / redo |
 
-## 🛠 Build & Flash
+### Viewers
+| Key | Action |
+|-----|--------|
+| `;` / `.` | Scroll |
+| `,` / `/` | Page, or zoom in the image viewer |
+| `Shift`+`,` / `/` | Pan horizontally |
+| `F` / `1` | Fit / 1:1 (image viewer) |
+| `G` / `E` | Start / end of file |
+| `Esc` | Close |
 
-1. **Required Libraries:**
-   - M5Cardputer (install via Library Manager)
+### Settings
+`;` `.` move, `,` `/` change the value, `R` resets the current category, `Esc` saves and exits.
 
-2. **Setup:**
-   - Open `CardEX.ino` in Arduino IDE.
-   - Select Board: `M5Stack Cardputer` or `ESP32S3 Dev Module`.
-   - Settings:
-     - USB CDC On Boot: **Enabled**
-     - Flash Size: **8MB**
-     - Partition Scheme: **8MB (3MB APP/1.5MB SPIFFS)**
+## 🛠 Build & flash
 
+### PlatformIO (recommended)
+
+```bash
+pio run -e cardputer-adv -t upload   # build and flash
+pio device monitor                   # serial log
+pio test -e native                   # host-side unit tests
+```
+
+Everything — board, partition layout, USB mode and the pinned library version — is in
+`platformio.ini`. Note that the Cardputer ADV board definition hardcodes `ARDUINO_USB_MODE=1`,
+which builds out the TinyUSB stack that mass storage needs; `platformio.ini` overrides it back
+to `0`.
+
+### Arduino IDE
+
+1. Install **M5Cardputer 1.2.0 or newer** via the Library Manager.
+2. Open `CardEX.ino` — it is only a marker file; the code lives in `src/`, which the IDE
+   compiles recursively.
+3. Board: `M5Stack StampS3` or `ESP32S3 Dev Module`, with:
+   - USB CDC On Boot: **Enabled**
+   - USB Mode: **USB-OTG (TinyUSB)** — required for USB mass storage
+   - Flash Size: **8MB**
+   - Partition Scheme: **8M with spiffs (3MB APP/1.5MB SPIFFS)**
 
 ## ⚙️ Configuration
 
-You can customize colors and limits in `src/Config.h`:
+Settings live in `/CardEX.ini` on the SD card and are best changed from `Fn+O` in the app. The
+file is written back with your comments and any unknown keys preserved, so it is safe to edit by
+hand too:
 
-```cpp
-#define ACCENT_COLOR    0x07E0  // Main accent color (Green)
-#define BG_COLOR        0x3186  // Background color
-#define MAX_FILE_SIZE   32768   // Max edit size (32KB)
+```ini
+// Appearance
+BG_COLOR = 0x3186
+ACCENT_COLOR = 0x07E0
+SCREEN_BRIGHTNESS = 128
+
+// Battery
+BAT_WARN_LEVEL = 50   // percentage turns amber below this
+BAT_CRIT_LEVEL = 25   // and red below this
+
+// Editor
+TAB_SIZE = 4
+AUTO_SAVE_INTERVAL = 0  // milliseconds; 0 disables
 ```
+
+If a setting makes the interface unreadable, delete `/CardEX.ini` — the defaults are rewritten on
+the next boot.
+
+## 📟 Hardware notes (Cardputer ADV)
+
+| | |
+|---|---|
+| MCU | Stamp-S3A / ESP32-S3FN8, 8MB flash |
+| Display | 1.14" 240×135 ST7789V2 |
+| Keyboard | TCA8418 I²C matrix controller (INT on G11) |
+| microSD | SPI — CS G12, MOSI G14, CLK G40, MISO G39 |
+| Audio | ES8311 codec + NS4150B amplifier |
+| Battery | 1750mAh |
+| RTC | none — file timestamps are not meaningful until time is set |
+
+## 📄 License
+
+MIT — see [LICENSE](LICENSE).
