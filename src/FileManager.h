@@ -108,6 +108,8 @@ private:
   void handleKeyboard();
   void handleEditorKeyboard();
   void enterMassStorage();
+  void openFileByType(const String &path, size_t size);
+  bool looksLikeText(const String &path);
   void updateFreeSpace(bool force);
   void quitEditor();
   void ensureSelectionVisible();

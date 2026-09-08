@@ -1,7 +1,11 @@
 #include "FileManager.h"
+#include "PathUtils.h"
 #include "Settings.h"
 #include "SettingsScreen.h"
 #include "UI.h"
+#include "viewers/HexViewer.h"
+#include "viewers/ImageViewer.h"
+#include "viewers/TextViewer.h"
 #include <M5Cardputer.h>
 
 // ==================== CONSTRUCTOR ====================
@@ -178,14 +182,86 @@ void FileManager::openSelected() {
     searchMode = false;
     refreshFileList();
   } else {
-    // Open file in editor
-    if (editor.openFile(getCurrentFS(), fullPath)) {
-      inEditor = true;
-      Input::flush();
-    } else {
-      UI::showToast("Failed to open file", ERROR_COLOR);
+    openFileByType(fullPath, entry.size);
+  }
+}
+
+// ==================== OPEN FILE BY TYPE ====================
+// Everything used to go to the editor, including binaries - which loaded as
+// garbage and were written back as garbage on save - and anything over
+// MAX_FILE_SIZE simply refused to open at all.
+void FileManager::openFileByType(const String &path, size_t size) {
+  if (ImageViewer::handles(path)) {
+    ImageViewer::run(getCurrentFS(), path);
+    return;
+  }
+
+  if (!looksLikeText(path)) {
+    HexViewer::run(getCurrentFS(), path);
+    return;
+  }
+
+  // Too large to hold in RAM, but still perfectly readable.
+  if (size > MAX_FILE_SIZE) {
+    TextViewer::run(getCurrentFS(), path);
+    return;
+  }
+
+  if (editor.openFile(getCurrentFS(), path)) {
+    inEditor = true;
+    Input::flush();
+  } else {
+    // openFile() reports its own reason (too large, binary, unreadable).
+    Input::flush();
+    UI::clearScreen();
+    UI::pushCanvas();
+  }
+}
+
+// ==================== LOOKS LIKE TEXT ====================
+// Extension first, then a peek at the content. Sniffing matters because plain
+// text on a Cardputer often has no extension at all.
+bool FileManager::looksLikeText(const String &path) {
+  static const char *const kTextExtensions[] = {
+      "txt", "md",   "ini", "cfg", "conf", "json", "xml",  "csv", "log",
+      "c",   "h",    "cpp", "hpp", "py",   "js",   "ts",   "css", "html",
+      "sh",  "yaml", "yml", "toml", "ino", "rs",   "go",   "lua"};
+
+  const std::string ext = PathUtils::extension(std::string(path.c_str()));
+  for (const char *candidate : kTextExtensions) {
+    if (ext == candidate) {
+      return true;
     }
   }
+
+  File file = getCurrentFS().open(path, FILE_READ);
+  if (!file) {
+    return false;
+  }
+
+  // A NUL in the first block means binary. Counting control characters as well
+  // catches files that are technically NUL-free but unreadable as text.
+  uint8_t sample[256];
+  const size_t count = file.read(sample, sizeof(sample));
+  file.close();
+
+  if (count == 0) {
+    return true; // Empty file: let the editor have it.
+  }
+
+  size_t suspicious = 0;
+  for (size_t i = 0; i < count; i++) {
+    const uint8_t c = sample[i];
+    if (c == 0) {
+      return false;
+    }
+    const bool printable = (c >= 0x20 && c < 0x7F) || c == '\t' || c == '\n' ||
+                           c == '\r' || c >= 0x80; // >=0x80 may be UTF-8.
+    if (!printable) {
+      suspicious++;
+    }
+  }
+  return suspicious * 10 < count; // Under 10% control bytes.
 }
 
 // ==================== GO BACK ====================
