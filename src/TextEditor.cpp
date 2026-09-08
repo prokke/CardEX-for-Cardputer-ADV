@@ -1,4 +1,5 @@
 #include "TextEditor.h"
+#include "Settings.h"
 #include "UI.h"
 #include <M5Cardputer.h>
 
@@ -16,7 +17,6 @@ TextEditor::TextEditor() {
   hasSelection = false;
   selStartRow = selStartCol = selEndRow = selEndCol = 0;
   lastSearchRow = lastSearchCol = 0;
-  showLineNumbers = true;
   eolStyle = EOL_LF;
   trailingNewline = true;
   totalChars = 0;
@@ -148,6 +148,7 @@ bool TextEditor::openFile(fs::FS &fs, const String &path) {
   cursorCol = 0;
   scrollRow = 0;
   hasSelection = false;
+  lastAutoSave = millis();
 
   return true;
 }
@@ -332,14 +333,33 @@ void TextEditor::insertNewLine() {
 
   // Split line at cursor
   String newLine = line.substring(cursorCol);
-  line = line.substring(0, cursorCol);
 
+  // Carry the current line's leading whitespace onto the new line.
+  String indent;
+  if (AUTO_INDENT) {
+    for (int i = 0; i < cursorCol && i < (int)line.length(); i++) {
+      const char c = line[i];
+      if (c != ' ' && c != '\t') {
+        break;
+      }
+      indent += c;
+    }
+    newLine = indent + newLine;
+  }
+
+  line = line.substring(0, cursorCol);
   lines.insert(lines.begin() + cursorRow + 1, newLine);
 
   addUndoAction(UndoAction::INSERT, cursorRow, cursorCol, "\n", "");
+  // The indent is a separate step so undo removes the split as one action and
+  // the inserted whitespace as another, both consistent with the buffer.
+  if (indent.length() > 0) {
+    addUndoAction(UndoAction::DELETE, cursorRow + 1, 0, indent, "");
+    totalChars += indent.length();
+  }
 
   cursorRow++;
-  cursorCol = 0;
+  cursorCol = indent.length();
   modified = true;
 
   adjustScroll();
@@ -666,7 +686,8 @@ void TextEditor::render() {
   // Content area
   int visibleLines = getVisibleLines();
   int y = HEADER_HEIGHT + 2;
-  int lineNumWidth = showLineNumbers ? 20 : 0;
+  const bool showLineNumbers = SHOW_LINE_NUMBERS;
+  const int lineNumWidth = showLineNumbers ? 20 : 0;
 
   for (int i = 0; i < visibleLines && (i + scrollRow) < (int)lines.size(); i++) {
     int lineIndex = i + scrollRow;
@@ -740,18 +761,32 @@ void TextEditor::render() {
 }
 
 // ==================== UPDATE ====================
-void TextEditor::update() {
+bool TextEditor::update() {
+  bool changed = false;
+
   // Update battery every 30 seconds
   if (millis() - lastBatteryCheck > 30000) {
     lastBatteryLevel = M5Cardputer.Power.getBatteryLevel();
     lastBatteryCheck = millis();
   }
 
+  // Autosave. AUTO_SAVE_INTERVAL has been in CardEX.ini since the start but
+  // nothing ever read it; 0 keeps it off, which is the default.
+  if (fileOpen && modified && AUTO_SAVE_INTERVAL > 0 &&
+      millis() - lastAutoSave > (unsigned long)AUTO_SAVE_INTERVAL) {
+    lastAutoSave = millis();
+    saveFile();
+    changed = true;
+  }
+
   // Blink cursor
-  if (millis() - lastBlinkTime > CURSOR_BLINK_MS) {
+  if (millis() - lastBlinkTime > (unsigned long)CURSOR_BLINK_MS) {
     cursorVisible = !cursorVisible;
     lastBlinkTime = millis();
+    changed = true;
   }
+
+  return changed;
 }
 
 // ==================== ENSURE CURSOR IN BOUNDS ====================

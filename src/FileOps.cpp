@@ -1,5 +1,7 @@
 #include "FileOps.h"
 
+#include "Settings.h"
+
 #include <algorithm>
 
 namespace {
@@ -46,8 +48,10 @@ bool FileOps::listDirectory(fs::FS &fs, const String &path,
     entry.size = file.size();
     entry.modified = file.getLastWrite();
 
-    // Skip hidden files and current directory
-    if (entry.name.length() > 0 && entry.name[0] != '.') {
+    // Hidden entries used to be filtered unconditionally, with no way to see
+    // them at all.
+    const bool hidden = entry.name.length() > 0 && entry.name[0] == '.';
+    if (entry.name.length() > 0 && (SHOW_HIDDEN_FILES || !hidden)) {
       files.push_back(entry);
     }
 
@@ -57,10 +61,42 @@ bool FileOps::listDirectory(fs::FS &fs, const String &path,
 
   dir.close();
 
-  // Sort: directories first, then alphabetically
-  std::sort(files.begin(), files.end());
-
+  sortEntries(files);
   return true;
+}
+
+// ==================== SORT ENTRIES ====================
+// Directories always come first; SORT_DESCENDING reverses only the comparison
+// within each group, so folders never sink below files.
+void FileOps::sortEntries(std::vector<FileEntry> &files) {
+  std::sort(files.begin(), files.end(),
+            [](const FileEntry &a, const FileEntry &b) {
+              if (a.isDirectory != b.isDirectory) {
+                return a.isDirectory;
+              }
+
+              bool less;
+              switch (SORT_MODE) {
+                case SORT_SIZE:
+                  if (a.size != b.size) {
+                    less = a.size < b.size;
+                    break;
+                  }
+                  less = a.name.compareTo(b.name) < 0;
+                  break;
+                case SORT_DATE:
+                  if (a.modified != b.modified) {
+                    less = a.modified < b.modified;
+                    break;
+                  }
+                  less = a.name.compareTo(b.name) < 0;
+                  break;
+                default:
+                  less = a.name.compareTo(b.name) < 0;
+                  break;
+              }
+              return SORT_DESCENDING ? !less : less;
+            });
 }
 
 // ==================== COPY FILE ====================
@@ -360,7 +396,8 @@ void FileOps::searchRecursive(fs::FS &fs, const String &path,
     const String childPath = entryPath(file);
     const bool childIsDir = file.isDirectory();
 
-    if (baseName.length() > 0 && baseName[0] != '.') {
+    const bool hidden = baseName.length() > 0 && baseName[0] == '.';
+    if (baseName.length() > 0 && (SHOW_HIDDEN_FILES || !hidden)) {
       String lowerName = baseName;
       lowerName.toLowerCase();
 

@@ -1,4 +1,6 @@
 #include "FileManager.h"
+#include "Settings.h"
+#include "SettingsScreen.h"
 #include "UI.h"
 #include <M5Cardputer.h>
 
@@ -16,31 +18,27 @@ FileManager::FileManager() {
   listTruncated = false;
   lastBatteryLevel = 0;
   lastBatteryCheck = 0;
+  cachedFreeBytes = 0;
+  lastFreeSpaceCheck = 0;
+  renderRequested = true;
+}
+
+// ==================== INIT STORAGE ====================
+bool FileManager::initStorage() {
+  static bool spiStarted = false;
+  if (!spiStarted) {
+    SPI.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_CS_PIN);
+    spiStarted = true;
+  }
+  return SD.begin(SD_SPI_CS_PIN, SPI);
 }
 
 // ==================== INIT ====================
 bool FileManager::init() {
-  // Initialize SD card
-  SPI.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_CS_PIN);
-  sdAvailable = SD.begin(SD_SPI_CS_PIN, SPI);
-
-
-  if (!sdAvailable) {
-    Serial.println("SD Card initialization failed!");
-    UI::showMessageDialog("Error", "No SD Card found!");
-    // return false; // Allow running without SD?
-    // For now, let's return false as per original logic if SD is critical
-    return false;
-  } else {
-    Serial.println("SD Card initialized");
-    useSD = true;
-    
-    // Load config from SD
-    loadConfig();
-    
-    // Apply brightness setting
-    M5Cardputer.Display.setBrightness(SCREEN_BRIGHTNESS);
-  }
+  // The card is mounted and the config loaded by setup() before the splash.
+  sdAvailable = true;
+  useSD = true;
+  Settings::apply();
 
   // Initial battery check
   lastBatteryLevel = M5Cardputer.Power.getBatteryLevel();
@@ -54,30 +52,61 @@ bool FileManager::init() {
 
 // ==================== UPDATE ====================
 void FileManager::update() {
+  renderRequested = false;
+
   // Update battery every 30 seconds
   if (millis() - lastBatteryCheck > 30000) {
-    lastBatteryLevel = M5Cardputer.Power.getBatteryLevel();
+    const int level = M5Cardputer.Power.getBatteryLevel();
+    if (level != lastBatteryLevel) {
+      renderRequested = true;
+    }
+    lastBatteryLevel = level;
     lastBatteryCheck = millis();
   }
 
+  updateFreeSpace(false);
+
+  // Mass storage runs its own blocking loop from handleKeyboard(), so this
+  // state is never observed here.
   if (appMode == MODE_MASS_STORAGE) {
-      // Should not be in this state in update() if loop is blocking, 
-      // but if we are here, we handle entry/exit or just run loop.
-      // Actually, we'll enter the loop from the keyboard handler, so we shouldn't be here in update() 
-      // unless we want to use update() as the blocking container (state machine).
-      // Let's stick to the state machine but make massStorage.loop() blocking.
-      
-      // Wait, if we block in handleKeyboard, update() won't run.
-      // Let's change how we enter the mode.
-      return;
+    return;
+  }
+
+  // Any key event may have changed something, so that alone earns a repaint.
+  if (!Input::events().empty() || Input::optJustPressed()) {
+    renderRequested = true;
+  }
+  // The toast has to be drawn while it lives and once more when it expires.
+  if (UI::toastVisible()) {
+    renderRequested = true;
   }
 
   if (inEditor) {
-    editor.update();
+    if (editor.update()) {
+      renderRequested = true; // Cursor blinked or an autosave ran.
+    }
     handleEditorKeyboard();
   } else {
     handleKeyboard();
   }
+}
+
+// ==================== UPDATE FREE SPACE ====================
+void FileManager::updateFreeSpace(bool force) {
+  if (!sdAvailable) {
+    cachedFreeBytes = 0;
+    return;
+  }
+  // usedBytes() is a full FAT walk. Calling it every frame was the single
+  // biggest cost in the render path, and on the ADV a slow loop also overflows
+  // the keyboard controller's 10-event FIFO and drops keystrokes.
+  if (!force && lastFreeSpaceCheck != 0 &&
+      millis() - lastFreeSpaceCheck < 30000) {
+    return;
+  }
+  cachedFreeBytes = SD.totalBytes() - SD.usedBytes();
+  lastFreeSpaceCheck = millis();
+  renderRequested = true;
 }
 
 // ==================== RENDER ====================
@@ -99,19 +128,10 @@ void FileManager::render() {
       countInfo += "+";
     }
 
-    // Add free space info
-    String freeSpaceStr = "";
-    if (sdAvailable) {
-      uint64_t freeBytes = SD.totalBytes() - SD.usedBytes();
-      freeSpaceStr = FileOps::formatBytes(freeBytes) + " free";
-    }
-
-    // Construct footer status string
+    // Free space, from the cache rather than a FAT walk per frame.
     String status = countInfo;
-    if (freeSpaceStr.length() > 0) {
-        // Pad with spaces to push free space to the right (approximate, since font is mono)
-        // Or just separate with pipe
-        status += " | " + freeSpaceStr;
+    if (sdAvailable) {
+      status += " | " + FileOps::formatBytes(cachedFreeBytes) + " free";
     }
 
     // Use centralized UI method
@@ -272,7 +292,7 @@ void FileManager::deleteSelected() {
     }
   }
 
-  if (!UI::showConfirmDialog("Confirm Delete", message)) {
+  if (CONFIRM_DELETE && !UI::showConfirmDialog("Confirm Delete", message)) {
     return;
   }
 
@@ -557,6 +577,7 @@ fs::FS &FileManager::getCurrentFS() { return (fs::FS &)SD; }
 // ==================== REFRESH FILE LIST ====================
 void FileManager::refreshFileList() {
   searchMode = false;
+  updateFreeSpace(true); // The listing changed, so the number probably did too.
   FileOps::listDirectory(getCurrentFS(), currentPath, files, &listTruncated);
 
   // Ensure selection is valid
@@ -608,6 +629,13 @@ void FileManager::handleKeyboard() {
         case 'v': pasteFromClipboard(); return;
         case 'p': showFileProperties(); return;
         case 'm': enterMassStorage(); return;
+        case 'o':
+          // Settings. Re-sort afterwards: sort order and hidden-file
+          // visibility are both settings.
+          if (SettingsScreen::run()) {
+            refreshFileList();
+          }
+          return;
         default: break;
       }
       continue;
@@ -655,7 +683,7 @@ void FileManager::enterMassStorage() {
   // under us, so the mounted filesystem's cached view is stale; re-listing
   // alone would show entries that no longer exist.
   SD.end();
-  sdAvailable = SD.begin(SD_SPI_CS_PIN, SPI);
+  sdAvailable = initStorage();
   if (!sdAvailable) {
     UI::showMessageDialog("Error", "SD remount failed");
   }
@@ -751,8 +779,12 @@ void FileManager::handleEditorKeyboard() {
       continue;
     }
     if (event.isTab()) {
-      for (int i = 0; i < TAB_SIZE; i++) {
-        editor.insertChar(' ');
+      if (TAB_USES_SPACES) {
+        for (int i = 0; i < TAB_SIZE; i++) {
+          editor.insertChar(' ');
+        }
+      } else {
+        editor.insertChar('\t');
       }
       continue;
     }

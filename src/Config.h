@@ -7,7 +7,7 @@
 #define SCREEN_WIDTH 240
 #define SCREEN_HEIGHT 135
 
-// Layout dimensionsge
+// Layout dimensions
 #define HEADER_HEIGHT 12
 #define FOOTER_HEIGHT 12
 #define CONTENT_HEIGHT (SCREEN_HEIGHT - HEADER_HEIGHT - FOOTER_HEIGHT) // 111px
@@ -50,7 +50,6 @@ extern uint16_t CURSOR_COLOR;
 #define SD_SPI_CS_PIN 12
 
 // ==================== MEMORY LIMITS ====================
-// ==================== MEMORY LIMITS ====================
 #define MAX_FILES_IN_LIST 100    // Maximum files to load at once
 #define MAX_FILE_SIZE 32768      // 32KB max for editing (Safe for SRAM)
 #define EDITOR_BUFFER_SIZE 32768 // Match file size
@@ -61,41 +60,46 @@ extern uint16_t CURSOR_COLOR;
 // ==================== EDITOR SETTINGS ====================
 #define DEFAULT_TAB_SIZE 4
 #define DEFAULT_CURSOR_BLINK_MS 500
-#define DEFAULT_AUTO_SAVE_INTERVAL 30000
-#define DEFAULT_MAX_UNDO_LEVELS 10
+#define DEFAULT_AUTO_SAVE_INTERVAL 0 // 0 disables autosave
+#define DEFAULT_MAX_UNDO_LEVELS 50
 
 extern int TAB_SIZE;
 extern int CURSOR_BLINK_MS;
 extern int AUTO_SAVE_INTERVAL;
 extern int MAX_UNDO_LEVELS;
+extern bool SHOW_LINE_NUMBERS;
+extern bool AUTO_INDENT;
+extern bool TAB_USES_SPACES;
 
 // ==================== UI SETTINGS ====================
 #define DEFAULT_TOAST_DURATION 2000
-#define DEFAULT_SCROLL_DELAY 100
 #define DEFAULT_KEY_REPEAT_DELAY 500
 #define DEFAULT_KEY_REPEAT_RATE 100
 #define DEFAULT_SCREEN_BRIGHTNESS 128 // 0-255
 
 extern int TOAST_DURATION;
-extern int SCROLL_DELAY;
 extern int KEY_REPEAT_DELAY;
 extern int KEY_REPEAT_RATE;
 extern int SCREEN_BRIGHTNESS;
 
-// ==================== CONFIG LOADER ====================
-void loadConfig();
-void saveDefaultConfig();
+// ==================== BATTERY THRESHOLDS ====================
+// The percentage is drawn in WARNING_COLOR below the first and ERROR_COLOR
+// below the second.
+#define DEFAULT_BAT_WARN_LEVEL 50
+#define DEFAULT_BAT_CRIT_LEVEL 25
 
+extern int BAT_WARN_LEVEL;
+extern int BAT_CRIT_LEVEL;
 
-// ==================== FILE ICONS (Handled by UI::drawFileList) ====================
-// Defined as empty strings as we will draw them using primitives
-#define ICON_FOLDER ""
-#define ICON_TEXT ""
-#define ICON_CODE ""
-#define ICON_CONFIG ""
-#define ICON_BINARY ""
-#define ICON_LOG ""
-#define ICON_UNKNOWN ""
+// ==================== FILE MANAGER BEHAVIOUR ====================
+extern bool SHOW_HIDDEN_FILES;
+extern bool CONFIRM_DELETE;
+extern int SORT_MODE;
+extern bool SORT_DESCENDING;
+
+// ==================== CONFIG ====================
+#define CONFIG_FILE_PATH "/CardEX.ini"
+
 
 // ==================== KEYBOARD KEYS ====================
 // Deliberately not defined here. M5Cardputer's utility/Keyboard/Keyboard_def.h
@@ -106,14 +110,6 @@ void saveDefaultConfig();
 
 // ==================== APPLICATION MODES ====================
 enum AppMode { MODE_FILE_MANAGER, MODE_TEXT_EDITOR, MODE_DIALOG, MODE_HELP, MODE_MASS_STORAGE };
-
-// ==================== DIALOG TYPES ====================
-enum DialogType {
-  DIALOG_CONFIRM,
-  DIALOG_INPUT,
-  DIALOG_PROGRESS,
-  DIALOG_MESSAGE
-};
 
 // ==================== FILE OPERATION TYPES ====================
 enum FileOperation {

@@ -62,6 +62,9 @@ public:
   static bool copyDirectory(fs::FS &srcFS, const String &srcPath, fs::FS &dstFS,
                             const String &dstPath, int depth = 0);
 
+  // Sorts in place according to SORT_MODE / SORT_DESCENDING.
+  static void sortEntries(std::vector<FileEntry> &files);
+
   // Number of entries directly inside a directory, for delete confirmations.
   static int countEntries(fs::FS &fs, const String &path);
 

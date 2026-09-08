@@ -6,18 +6,39 @@ unsigned long UI::toastStartTime = 0;
 String UI::toastMessage = "";
 uint16_t UI::toastColor = TEXT_COLOR;
 bool UI::toastActive = false;
+bool UI::canvasReady = false;
 
 // ==================== INIT ====================
 void UI::init() {
-  canvas.createSprite(SCREEN_WIDTH, SCREEN_HEIGHT);
   canvas.setColorDepth(16);
+  // 240 * 135 * 2 = 64,800 bytes of an ~320KB heap. The result was never
+  // checked, so a failed allocation left every draw call writing to nothing
+  // and the screen simply stayed blank with no clue why.
+  if (!canvas.createSprite(SCREEN_WIDTH, SCREEN_HEIGHT)) {
+    Serial.println("UI: canvas allocation failed - drawing direct to display");
+    canvasReady = false;
+  } else {
+    canvasReady = true;
+  }
   canvas.setTextSize(1);
   canvas.setTextColor(TEXT_COLOR, BG_COLOR);
   clearScreen();
 }
 
+// ==================== TARGET ====================
+// Falls back to the display itself when the off-screen canvas could not be
+// allocated. Slower and it flickers, but the app stays usable.
+M5GFX &UI::displayTarget() { return M5Cardputer.Display; }
+bool UI::hasCanvas() { return canvasReady; }
+
 // ==================== PUSH CANVAS ====================
-void UI::pushCanvas() { canvas.pushSprite(0, 0); }
+void UI::pushCanvas() {
+  if (!canvasReady) {
+    return; // Already drawn straight to the display.
+  }
+  drawToast();
+  canvas.pushSprite(0, 0);
+}
 
 // ==================== DRAW HEADER ====================
 void UI::drawHeader(const String &path, bool isSD, int battery) {
@@ -32,9 +53,21 @@ void UI::drawHeader(const String &path, bool isSD, int battery) {
   String storage = isSD ? "[SD]" : "[FL]";
   canvas.drawString(storage, 170, 2);
 
-  // Battery
+  // Battery. Stays a percentage - it is the most information for the fewest
+  // pixels on a 240px header - but the colour carries the warning.
+  uint16_t batColor = TEXT_COLOR;
+  if (battery <= BAT_CRIT_LEVEL) {
+    batColor = ERROR_COLOR;
+  } else if (battery <= BAT_WARN_LEVEL) {
+    batColor = WARNING_COLOR;
+  }
+  if (M5Cardputer.Power.isCharging()) {
+    batColor = ACCENT_COLOR;
+  }
+  canvas.setTextColor(batColor, MENU_BG);
   String bat = String(battery) + "%";
   canvas.drawString(bat, 210, 2);
+  canvas.setTextColor(TEXT_COLOR, MENU_BG);
 
   // Border
   canvas.drawLine(0, HEADER_HEIGHT - 1, SCREEN_WIDTH, HEADER_HEIGHT - 1,
@@ -49,24 +82,40 @@ void UI::drawFooter(const String &hints) {
   // Border
   canvas.drawLine(0, footerY, SCREEN_WIDTH, footerY, BORDER_COLOR);
 
-   // Show toast if active (OVERLAYS footer text)
-  if (toastActive && (millis() - toastStartTime < TOAST_DURATION)) {
-    // Fill footer again to clear hints (already cleared above but fine to keep suitable for overlay logic)
-    // Actually we just cleared it above at start of function, so we can just draw.
-    
-    // Draw Toast
-    canvas.setTextColor(toastColor, MENU_BG);
-    String displayToast = truncateString(toastMessage, 38);
-    canvas.drawString(displayToast, 2, footerY + 2); // Centered in footer
-  } else {
-    // Toast expired or inactive
-    if (toastActive) toastActive = false;
+  // Hints only. The toast is painted by drawToast() from pushCanvas(), so it
+  // appears over whatever is on screen - including the editor, which does not
+  // draw a footer at all and therefore never showed a single toast. "File
+  // saved" was invisible, and the flag stayed set until the user happened to
+  // return to the file list.
+  canvas.setTextColor(SECONDARY_COLOR, MENU_BG);
+  String displayHints = truncateString(hints, 38);
+  canvas.drawString(displayHints, 2, footerY + 2);
+}
 
-    // Draw Hints (Normal Status)
-    canvas.setTextColor(SECONDARY_COLOR, MENU_BG);
-    String displayHints = truncateString(hints, 38);
-    canvas.drawString(displayHints, 2, footerY + 2);
+// ==================== DRAW TOAST ====================
+void UI::drawToast() {
+  if (!toastActive) {
+    return;
   }
+  if (millis() - toastStartTime >= (unsigned long)TOAST_DURATION) {
+    toastActive = false;
+    return;
+  }
+
+  const String text = truncateString(toastMessage, 38);
+  const int width = min(SCREEN_WIDTH, (int)text.length() * CHAR_WIDTH + 8);
+  const int x = (SCREEN_WIDTH - width) / 2;
+  const int y = SCREEN_HEIGHT - FOOTER_HEIGHT - 14;
+
+  canvas.fillRect(x, y, width, 12, MENU_BG);
+  canvas.drawRect(x, y, width, 12, toastColor);
+  canvas.setTextColor(toastColor, MENU_BG);
+  canvas.drawString(text, x + 4, y + 2);
+}
+
+bool UI::toastVisible() {
+  return toastActive &&
+         (millis() - toastStartTime < (unsigned long)TOAST_DURATION);
 }
 
 // ==================== DRAW FOOTER PROGRESS ====================
@@ -428,12 +477,12 @@ void UI::showHelpMenu(bool isEditorMode) {
   };
   static const char *const managerHelp[] = {
       "; . , /    Up/Down/Back/Open",
-      "Enter      Open",
       "Bksp       Parent folder",
       "Fn+N       New file or folder",
       "Fn+D / R   Delete / Rename",
       "Fn+C/X/V   Copy / Cut / Paste",
       "Fn+P / F   Properties / Search",
+      "Fn+O       Settings",
       "Fn+M       USB mass storage",
   };
 
@@ -489,7 +538,13 @@ String UI::truncateString(const String &str, int maxLen) {
 
 // ==================== DRAW CENTERED TEXT ====================
 void UI::drawCenteredText(const String &text, int y, uint16_t color) {
-  int x = (SCREEN_WIDTH - (text.length() * CHAR_WIDTH)) / 2;
-  canvas.setTextColor(color, canvas.readPixel(x, y));
-  canvas.drawString(text, x, y);
+  // Clamp before use: a string wider than the screen produced a negative x,
+  // and readPixel() then sampled outside the sprite to pick a background.
+  const int maxChars = SCREEN_WIDTH / CHAR_WIDTH;
+  const String shown = truncateString(text, maxChars);
+  const int x = max(0, (SCREEN_WIDTH - ((int)shown.length() * CHAR_WIDTH)) / 2);
+
+  const int sampleY = constrain(y, 0, SCREEN_HEIGHT - 1);
+  canvas.setTextColor(color, canvas.readPixel(x, sampleY));
+  canvas.drawString(shown, x, y);
 }

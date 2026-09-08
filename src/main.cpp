@@ -17,6 +17,7 @@
 #include "Config.h"
 #include "FileManager.h"
 #include "Input.h"
+#include "Settings.h"
 #include "UI.h"
 #include <M5Cardputer.h>
 
@@ -44,6 +45,14 @@ void setup() {
 
   Serial.println("M5Cardputer initialized");
 
+  // Bring up the card and the configuration before anything is drawn. The
+  // splash used to render in the default palette because loadConfig() ran
+  // later, inside FileManager::init().
+  const bool sdReady = FileManager::initStorage();
+  if (sdReady) {
+    Settings::load();
+  }
+
   // Initialize UI
   UI::init();
   UI::clearScreen();
@@ -58,7 +67,21 @@ void setup() {
 
   delay(1000);
 
-  // Initialize file manager
+  // No card: offer a retry instead of hanging forever. The old build sat in a
+  // bare while(true) with "INIT FAILED!" on screen, so inserting a card meant
+  // power-cycling the device.
+  if (!sdReady) {
+    while (!FileManager::initStorage()) {
+      UI::clearScreen();
+      UI::drawCenteredText("NO SD CARD", 45, ERROR_COLOR);
+      UI::drawCenteredText("Insert a card and", 70, TEXT_COLOR);
+      UI::drawCenteredText("press any key to retry", 82, TEXT_COLOR);
+      UI::pushCanvas();
+      UI::waitForAnyKey();
+    }
+    Settings::load();
+  }
+
   if (!fileManager.init()) {
     Serial.println("File manager initialization failed!");
     M5Cardputer.Display.setTextColor(ERROR_COLOR, BG_COLOR);
@@ -90,9 +113,12 @@ void loop() {
   // Update file manager
   fileManager.update();
 
-  // No throttling needed with double buffering
-  fileManager.render();
+  // Repaint only when something changed. Pushing the 64,800-byte sprite
+  // unconditionally at ~100Hz burnt the SPI bus and the battery for nothing.
+  if (fileManager.needsRender()) {
+    fileManager.render();
+  }
 
   // Small delay to prevent excessive CPU usage
-  delay(10);
+  delay(5);
 }

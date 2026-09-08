@@ -67,7 +67,9 @@ public:
 
   // Display
   void render();
-  void update();
+  // Returns true when something changed that the caller must repaint - the
+  // cursor blink, or an autosave.
+  bool update();
 
   // State
   bool isModified() const { return modified; }
@@ -114,8 +116,8 @@ private:
   int lastSearchRow;
   int lastSearchCol;
 
-  // Settings
-  bool showLineNumbers;
+  // Autosave
+  unsigned long lastAutoSave;
 
   // Battery caching
   int lastBatteryLevel;

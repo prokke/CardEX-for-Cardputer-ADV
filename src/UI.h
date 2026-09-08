@@ -13,6 +13,8 @@ public:
   // Global off-screen canvas for double buffering
   static M5Canvas canvas;
   static void pushCanvas();
+  static bool hasCanvas();
+  static M5GFX &displayTarget();
 
   // Initialize UI
   static void init();
@@ -37,8 +39,10 @@ public:
   // Help menu
   static void showHelpMenu(bool isEditorMode);
 
-  // Toast notification
+  // Toast notification. Drawn as an overlay by pushCanvas(), so it shows on
+  // every screen rather than only where a footer happens to be drawn.
   static void showToast(const String &message, uint16_t color = TEXT_COLOR);
+  static bool toastVisible();
 
   // Blocks until any key is pressed, then swallows it. Used by the message and
   // help screens.
@@ -56,6 +60,9 @@ private:
   static String toastMessage;
   static uint16_t toastColor;
   static bool toastActive;
+  static bool canvasReady;
+
+  static void drawToast();
 };
 
 #endif // UI_H

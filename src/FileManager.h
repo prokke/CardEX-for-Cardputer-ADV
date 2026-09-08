@@ -15,12 +15,20 @@ class FileManager {
 public:
   FileManager();
 
+  // Mounts the SD card. Separate from init() so setup() can load the config
+  // before anything is drawn, and can retry without a reboot.
+  static bool initStorage();
+
   // Initialization
   bool init();
 
   // Main loop
   void update();
   void render();
+
+  // True when something changed since the last frame. The loop used to repaint
+  // and push the whole 64KB sprite every 10ms regardless.
+  bool needsRender() const { return renderRequested; }
 
   // Navigation
   void navigateUp();
@@ -81,6 +89,14 @@ private:
   int lastBatteryLevel;
   unsigned long lastBatteryCheck;
 
+  // Free-space caching. SD.usedBytes() walks the whole FAT, and render() called
+  // it on every frame.
+  uint64_t cachedFreeBytes;
+  unsigned long lastFreeSpaceCheck;
+
+  // Set by update() when the frame produced anything worth drawing.
+  bool renderRequested;
+
   // State
   AppMode appMode; // Current mode
 
@@ -92,6 +108,7 @@ private:
   void handleKeyboard();
   void handleEditorKeyboard();
   void enterMassStorage();
+  void updateFreeSpace(bool force);
   void quitEditor();
   void ensureSelectionVisible();
 };
