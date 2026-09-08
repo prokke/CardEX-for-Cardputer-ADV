@@ -33,3 +33,8 @@ desktop.ini
 # Local config (if any)
 local_config.h
 secrets.h
+
+# Tooling
+compile_commands.json
+.clangd/
+.cache/
