@@ -3,6 +3,7 @@
 
 #include "Config.h"
 #include "FileOps.h"
+#include "Input.h"
 #include <M5Cardputer.h>
 #include <vector>
 
@@ -38,6 +39,10 @@ public:
 
   // Toast notification
   static void showToast(const String &message, uint16_t color = TEXT_COLOR);
+
+  // Blocks until any key is pressed, then swallows it. Used by the message and
+  // help screens.
+  static void waitForAnyKey();
 
   // Utilities
   static void clearScreen();

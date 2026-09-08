@@ -16,6 +16,7 @@
 
 #include "Config.h"
 #include "FileManager.h"
+#include "Input.h"
 #include "UI.h"
 #include <M5Cardputer.h>
 
@@ -35,6 +36,7 @@ void setup() {
   // Initialize M5Cardputer
   auto cfg = M5.config();
   M5Cardputer.begin(cfg, true); // Enable keyboard
+  Input::begin();
 
   // Set display rotation
   M5Cardputer.Display.setRotation(1);
@@ -77,8 +79,13 @@ void setup() {
 
 // ==================== LOOP ====================
 void loop() {
-  // Update M5 system
+  // Update M5 system. This is what refreshes the keyboard's key list, and on
+  // the ADV it drains exactly one event from the TCA8418's 10-deep FIFO per
+  // call - so it must be reached often or keystrokes are silently lost.
   M5Cardputer.update();
+
+  // Turn the raw key list into this frame's events.
+  Input::update();
 
   // Update file manager
   fileManager.update();

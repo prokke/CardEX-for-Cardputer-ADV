@@ -167,6 +167,10 @@ void UI::drawFileList(const std::vector<FileEntry> &files, int selected,
 
 // ==================== SHOW CONFIRM DIALOG ====================
 bool UI::showConfirmDialog(const String &title, const String &message) {
+  // The chord that opened this dialog is still held; drop it so it cannot be
+  // read as an answer here.
+  Input::flush();
+
   // Draw dialog box
   int boxW = 200;
   int boxH = 70;
@@ -190,30 +194,54 @@ bool UI::showConfirmDialog(const String &title, const String &message) {
 
   pushCanvas(); // Show dialog
 
-  // Wait for input
-  while (true) {
+  // Wait for input. Input::flush() on the way out stops the key that opened
+  // this dialog from being seen again - or from autorepeating - by the caller.
+  bool result = false;
+  bool decided = false;
+  while (!decided) {
     M5Cardputer.update();
-    if (M5Cardputer.Keyboard.isChange()) {
-      auto status = M5Cardputer.Keyboard.keysState();
-      if (status.word.size() > 0) {
-        char key = status.word[0];
-        if (key == 'y' || key == 'Y')
-          return true;
-        if (key == 'n' || key == 'N')
-          return false;
+    Input::update();
+
+    for (const KeyEvent &event : Input::events()) {
+      if (event.repeat) {
+        continue;
       }
-      if (status.enter)
-        return true;
-      if (status.del)
-        return false;
+      if (event.isEnter()) {
+        result = true;
+        decided = true;
+        break;
+      }
+      // Esc and Backspace both cancel; Esc is the one the input dialog
+      // documents, Backspace matches "go back" elsewhere in the app.
+      if (event.isEsc() || event.isBackspace()) {
+        result = false;
+        decided = true;
+        break;
+      }
+      const char letter = event.letter();
+      if (letter == 'y') {
+        result = true;
+        decided = true;
+        break;
+      }
+      if (letter == 'n') {
+        result = false;
+        decided = true;
+        break;
+      }
     }
     delay(10);
   }
+
+  Input::flush();
+  return result;
 }
 
 // ==================== SHOW INPUT DIALOG ====================
 String UI::showInputDialog(const String &title, const String &prompt,
                            const String &defaultValue) {
+  Input::flush();
+
   String input = defaultValue;
 
   while (true) {
@@ -248,24 +276,30 @@ String UI::showInputDialog(const String &title, const String &prompt,
 
     // Handle input
     M5Cardputer.update();
-    if (M5Cardputer.Keyboard.isChange()) {
-      auto status = M5Cardputer.Keyboard.keysState();
+    Input::update();
 
-      if (status.enter) {
+    for (const KeyEvent &event : Input::events()) {
+      if (event.isEnter()) {
+        Input::flush();
         return input;
       }
-      if (status.del && input.length() > 0) {
-        input = input.substring(0, input.length() - 1);
+      // Cancel. The old code looked for 0x1B inside KeysState::word, which the
+      // fn layer never puts there, so these dialogs could not be cancelled at
+      // all - the only way out was to clear the field and confirm an empty name.
+      if (event.isEsc()) {
+        Input::flush();
+        return "";
       }
-      if (status.word.size() > 0) {
-        for (char c : status.word) {
-          if (c == 0x1B) { // ESC
-            return "";
-          }
-          if (input.length() < MAX_FILENAME_LEN) {
-            input += c;
-          }
+      if (event.isBackspace()) {
+        if (input.length() > 0) {
+          input = input.substring(0, input.length() - 1);
         }
+        continue;
+      }
+
+      const char c = event.text();
+      if (c != 0 && input.length() < MAX_FILENAME_LEN) {
+        input += c;
       }
     }
     delay(10);
@@ -274,6 +308,8 @@ String UI::showInputDialog(const String &title, const String &prompt,
 
 // ==================== SHOW MESSAGE DIALOG ====================
 void UI::showMessageDialog(const String &title, const String &message) {
+  Input::flush();
+
   // Draw dialog
   int boxW = 200;
   int boxH = 60;
@@ -297,17 +333,35 @@ void UI::showMessageDialog(const String &title, const String &message) {
 
   pushCanvas(); // Show dialog
 
-  // Wait for key
+  waitForAnyKey();
+}
+
+// ==================== WAIT FOR ANY KEY ====================
+// Shared by the message and help screens. Ignores autorepeat so that a key
+// still held from the action that opened the screen cannot dismiss it
+// instantly, and flushes on exit so it is not seen again by the caller.
+void UI::waitForAnyKey() {
   while (true) {
     M5Cardputer.update();
-    if (M5Cardputer.Keyboard.isChange()) {
-      auto status = M5Cardputer.Keyboard.keysState();
-      if (status.word.size() > 0 || status.enter || status.del) {
+    Input::update();
+
+    if (Input::optJustPressed()) {
+      break;
+    }
+    bool dismissed = false;
+    for (const KeyEvent &event : Input::events()) {
+      if (!event.repeat) {
+        dismissed = true;
         break;
       }
     }
+    if (dismissed) {
+      break;
+    }
     delay(10);
   }
+
+  Input::flush();
 }
 
 // ==================== SHOW PROGRESS BAR ====================
@@ -351,6 +405,7 @@ void UI::showProgressBar(const String &operation, int percent,
 
 // ==================== SHOW HELP MENU ====================
 void UI::showHelpMenu(bool isEditorMode) {
+  Input::flush();
   clearScreen();
 
   canvas.setTextColor(ACCENT_COLOR, BG_COLOR);
@@ -359,39 +414,39 @@ void UI::showHelpMenu(bool isEditorMode) {
   canvas.setTextColor(TEXT_COLOR, BG_COLOR);
   int y = 25;
 
-  if (isEditorMode) {
-    canvas.drawString("TEXT EDITOR:", 5, y);
-    y += 12;
-    canvas.setTextColor(SECONDARY_COLOR, BG_COLOR);
-    canvas.drawString("Arrows  Move cursor", 5, y);
-    y += 10;
-    canvas.drawString("Fn+S    Save file", 5, y);
-    y += 10;
-    canvas.drawString("Fn+Q    Quit editor", 5, y);
-    y += 10;
-    canvas.drawString("Fn+F    Find text", 5, y);
-    y += 10;
-    canvas.drawString("Fn+R    Replace text", 5, y);
-    y += 10;
-    canvas.drawString("Fn+Z/Y  Undo/Redo", 5, y);
-    y += 10;
-  } else {
-    canvas.drawString("FILE MANAGER:", 5, y);
-    y += 12;
-    canvas.setTextColor(SECONDARY_COLOR, BG_COLOR);
-    canvas.drawString("Fn+N    New File/Dir", 5, y);
-    y += 10;
-    canvas.drawString("Fn+D/R  Delete/Rename", 5, y);
-    y += 10;
-    canvas.drawString("Fn+C/V  Copy/Paste", 5, y);
-    y += 10;
-    canvas.drawString("Fn+X    Cut (Move)", 5, y);
-    y += 10;
-    canvas.drawString("Fn+P    Properties", 5, y);
-    y += 10;
-    canvas.drawString("Fn+F    Search", 5, y);
-    y += 10;
-    canvas.drawString("Fn+M    USB Mode", 5, y);
+  // Nine 10px rows fit between the title and the footer hint. Keep each line
+  // under 40 characters: the font is 6px wide on a 240px screen.
+  static const char *const editorHelp[] = {
+      "; . , /    Move cursor",
+      "Fn+;.,/    Type ; . , /",
+      "Bksp       Delete back",
+      "Fn+Bksp    Delete forward",
+      "Tab        Indent",
+      "Fn+S / Q   Save / Quit",
+      "Fn+F / R   Find / Replace",
+      "Fn+Z / Y   Undo / Redo",
+  };
+  static const char *const managerHelp[] = {
+      "; . , /    Up/Down/Back/Open",
+      "Enter      Open",
+      "Bksp       Parent folder",
+      "Fn+N       New file or folder",
+      "Fn+D / R   Delete / Rename",
+      "Fn+C/X/V   Copy / Cut / Paste",
+      "Fn+P / F   Properties / Search",
+      "Fn+M       USB mass storage",
+  };
+
+  const char *const *lines = isEditorMode ? editorHelp : managerHelp;
+  const size_t lineCount =
+      isEditorMode ? (sizeof(editorHelp) / sizeof(editorHelp[0]))
+                   : (sizeof(managerHelp) / sizeof(managerHelp[0]));
+
+  canvas.drawString(isEditorMode ? "TEXT EDITOR:" : "FILE MANAGER:", 5, y);
+  y += 12;
+  canvas.setTextColor(SECONDARY_COLOR, BG_COLOR);
+  for (size_t i = 0; i < lineCount; i++) {
+    canvas.drawString(lines[i], 5, y);
     y += 10;
   }
 
@@ -400,17 +455,7 @@ void UI::showHelpMenu(bool isEditorMode) {
 
   pushCanvas(); // Show help
 
-  // Wait for key
-  while (true) {
-    M5Cardputer.update();
-    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
-      auto status = M5Cardputer.Keyboard.keysState();
-      if (status.word.size() > 0 || status.enter || status.del || status.opt) {
-        break;
-      }
-    }
-    delay(10);
-  }
+  waitForAnyKey();
 
   // Clear screen after help closes
   clearScreen();

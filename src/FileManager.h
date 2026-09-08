@@ -2,6 +2,7 @@
 #define FILEMANAGER_H
 
 #include "Config.h"
+#include "Input.h"
 #include "MassStorage.h"
 #include "FileOps.h"
 #include "TextEditor.h"
@@ -49,11 +50,8 @@ public:
 
 private:
   // Storage
-private:
-  // Storage
   bool useSD;
   bool sdAvailable;
-  // bool flashAvailable; // Removed
 
   // Current path
   String currentPath;
@@ -75,9 +73,6 @@ private:
   int lastBatteryLevel;
   unsigned long lastBatteryCheck;
 
-  // Key repeat
-  unsigned long lastKeyRepeatTime;
-
   // State
   AppMode appMode; // Current mode
 
@@ -91,7 +86,8 @@ private:
   void refreshFileList();
   void handleKeyboard();
   void handleEditorKeyboard();
-  bool checkFnKey();
+  void enterMassStorage();
+  void quitEditor();
   void ensureSelectionVisible();
 };
 

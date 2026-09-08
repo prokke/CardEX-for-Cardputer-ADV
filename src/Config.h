@@ -98,13 +98,11 @@ void saveDefaultConfig();
 #define ICON_UNKNOWN ""
 
 // ==================== KEYBOARD KEYS ====================
-// Special keys (from M5Cardputer Keyboard)
-#define KEY_FN 0x00
-#define KEY_TAB '\t'
-#define KEY_ENTER '\n'
-#define KEY_BACKSPACE '\b'
-#define KEY_ESC 0x1B
-#define KEY_DELETE 0x7F
+// Deliberately not defined here. M5Cardputer's utility/Keyboard/Keyboard_def.h
+// owns KEY_FN, KEY_TAB, KEY_ENTER, KEY_BACKSPACE and KEY_DELETE, with different
+// values (KEY_TAB is 0x2b there, not '\t'). Defining them again produced four
+// "macro redefined" warnings and left the effective value dependent on include
+// order. Include <M5Cardputer.h> - or src/Input.h - for the real constants.
 
 // ==================== APPLICATION MODES ====================
 enum AppMode { MODE_FILE_MANAGER, MODE_TEXT_EDITOR, MODE_DIALOG, MODE_HELP, MODE_MASS_STORAGE };

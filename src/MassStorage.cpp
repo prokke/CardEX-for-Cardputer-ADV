@@ -1,4 +1,5 @@
 #include "MassStorage.h"
+#include "Input.h"
 #include "UI.h"
 #include <SD.h>
 
@@ -75,18 +76,18 @@ void usbEventCallback(void *arg, esp_event_base_t event_base, int32_t event_id, 
 
 void MassStorage::loop() {
     if (!active) return;
-    
+
     while (!shouldStop) {
-        // Check for exit key (Fn+M)
+        // Check for the exit chord (Fn+M). The old code scanned
+        // KeysState::word, which library 1.2.0 leaves empty whenever Fn is
+        // held - so this mode could not be left from the device at all, only
+        // by ejecting from the host.
         M5Cardputer.update();
-        if (M5Cardputer.Keyboard.isChange()) {
-            auto status = M5Cardputer.Keyboard.keysState();
-            if (status.fn) {
-                for (char c : status.word) {
-                    if (tolower(c) == 'm') {
-                        return; // Exit loop
-                    }
-                }
+        Input::update();
+
+        for (const KeyEvent &event : Input::events()) {
+            if (event.fn && event.letter() == 'm') {
+                return;
             }
         }
         yield(); // Critical: yield to USB/background tasks
