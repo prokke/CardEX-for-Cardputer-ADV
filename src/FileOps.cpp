@@ -1,9 +1,28 @@
 #include "FileOps.h"
 
+#include <algorithm>
+
+namespace {
+
+inline std::string toStd(const String &s) { return std::string(s.c_str()); }
+inline String toArduino(const std::string &s) { return String(s.c_str()); }
+
+// File::name() returns only the base name - VFSFileImpl::name() is
+// pathToFileName(path()) on every ESP32 core we support. Code that needs a
+// usable path must call path(); using name() produced a relative string that
+// the VFS layer rejects outright, which is what silently broke recursive
+// delete and recursive search.
+inline String entryPath(File &file) { return String(file.path()); }
+
+} // namespace
+
 // ==================== LIST DIRECTORY ====================
 bool FileOps::listDirectory(fs::FS &fs, const String &path,
-                            std::vector<FileEntry> &files) {
+                            std::vector<FileEntry> &files, bool *truncated) {
   files.clear();
+  if (truncated) {
+    *truncated = false;
+  }
 
   File dir = fs.open(path);
   if (!dir || !dir.isDirectory()) {
@@ -11,24 +30,28 @@ bool FileOps::listDirectory(fs::FS &fs, const String &path,
   }
 
   File file = dir.openNextFile();
-  while (file && files.size() < MAX_FILES_IN_LIST) {
+  while (file) {
+    if (files.size() >= MAX_FILES_IN_LIST) {
+      if (truncated) {
+        *truncated = true;
+      }
+      file.close();
+      break;
+    }
+
     FileEntry entry;
     entry.name = String(file.name());
+    entry.fullPath = entryPath(file);
     entry.isDirectory = file.isDirectory();
     entry.size = file.size();
     entry.modified = file.getLastWrite();
-
-    // Remove path prefix, keep only filename
-    int lastSlash = entry.name.lastIndexOf('/');
-    if (lastSlash >= 0) {
-      entry.name = entry.name.substring(lastSlash + 1);
-    }
 
     // Skip hidden files and current directory
     if (entry.name.length() > 0 && entry.name[0] != '.') {
       files.push_back(entry);
     }
 
+    file.close();
     file = dir.openNextFile();
   }
 
@@ -47,6 +70,10 @@ bool FileOps::copyFile(fs::FS &srcFS, const String &srcPath, fs::FS &dstFS,
   if (!srcFile) {
     return false;
   }
+  if (srcFile.isDirectory()) {
+    srcFile.close();
+    return false; // Directories go through copyDirectory().
+  }
 
   File dstFile = dstFS.open(dstPath, FILE_WRITE);
   if (!dstFile) {
@@ -54,23 +81,58 @@ bool FileOps::copyFile(fs::FS &srcFS, const String &srcPath, fs::FS &dstFS,
     return false;
   }
 
-  // Copy in chunks (4KB buffer)
-  uint8_t buffer[4096];
-  size_t totalBytes = srcFile.size();
+  // Static rather than a 4KB stack frame: copyDirectory() recurses, and this
+  // function is only ever active once at a time within that recursion.
+  static uint8_t buffer[4096];
+  const size_t totalBytes = srcFile.size();
   size_t copiedBytes = 0;
-  
+  int lastPercent = -1;
+  bool ok = true;
+
   while (srcFile.available()) {
-    size_t bytesRead = srcFile.read(buffer, sizeof(buffer));
-    dstFile.write(buffer, bytesRead);
-    
+    const size_t bytesRead = srcFile.read(buffer, sizeof(buffer));
+    if (bytesRead == 0) {
+      ok = false; // Short read before EOF: the card or the file is bad.
+      break;
+    }
+    // The return value was previously ignored, so a full card produced a
+    // truncated copy that still reported success - and moveFile then deleted
+    // the original.
+    if (dstFile.write(buffer, bytesRead) != bytesRead) {
+      ok = false;
+      break;
+    }
+
     copiedBytes += bytesRead;
     if (progressCallback && totalBytes > 0) {
-      progressCallback((copiedBytes * 100) / totalBytes);
+      // Only report when the number actually changes: the callback repaints
+      // and pushes the whole 64KB canvas, and firing it per 4KB block made
+      // copies crawl.
+      const int percent = (int)((copiedBytes * 100) / totalBytes);
+      if (percent != lastPercent) {
+        lastPercent = percent;
+        progressCallback(percent);
+      }
     }
   }
 
-  srcFile.close();
+  if (ok && copiedBytes != totalBytes) {
+    ok = false;
+  }
+
+  dstFile.flush();
+  const size_t written = dstFile.size();
   dstFile.close();
+  srcFile.close();
+
+  if (ok && written != totalBytes) {
+    ok = false;
+  }
+
+  if (!ok) {
+    dstFS.remove(dstPath); // Never leave a half-written file behind.
+    return false;
+  }
   return true;
 }
 
@@ -85,7 +147,8 @@ bool FileOps::moveFile(fs::FS &srcFS, const String &srcPath, fs::FS &dstFS,
     }
   }
 
-  // Otherwise copy and delete
+  // Otherwise copy and delete. The source is only removed once copyFile has
+  // verified the destination byte count.
   if (copyFile(srcFS, srcPath, dstFS, dstPath, progressCallback)) {
     return deleteFile(srcFS, srcPath);
   }
@@ -109,26 +172,104 @@ bool FileOps::createDirectory(fs::FS &fs, const String &path) {
 }
 
 // ==================== DELETE DIRECTORY ====================
-bool FileOps::deleteDirectory(fs::FS &fs, const String &path) {
+bool FileOps::deleteDirectory(fs::FS &fs, const String &path, int depth) {
+  if (depth > MAX_DIR_DEPTH) {
+    return false;
+  }
+
   File dir = fs.open(path);
   if (!dir || !dir.isDirectory()) {
     return false;
   }
 
-  // Delete all files in directory
-  File file = dir.openNextFile();
-  while (file) {
-    String filePath = String(file.name());
-    if (file.isDirectory()) {
-      deleteDirectory(fs, filePath);
+  // Collect first, then delete. Removing entries while openNextFile() is
+  // walking the directory makes FAT skip siblings, so the old in-loop delete
+  // could leave the directory non-empty and the final rmdir would fail.
+  std::vector<String> childFiles;
+  std::vector<String> childDirs;
+
+  File child = dir.openNextFile();
+  while (child) {
+    const String childPath = entryPath(child);
+    if (child.isDirectory()) {
+      childDirs.push_back(childPath);
     } else {
-      fs.remove(filePath);
+      childFiles.push_back(childPath);
     }
-    file = dir.openNextFile();
+    child.close();
+    child = dir.openNextFile();
   }
   dir.close();
 
+  for (const String &file : childFiles) {
+    if (!fs.remove(file)) {
+      return false;
+    }
+  }
+  for (const String &subdir : childDirs) {
+    if (!deleteDirectory(fs, subdir, depth + 1)) {
+      return false;
+    }
+  }
+
   return fs.rmdir(path);
+}
+
+// ==================== COPY DIRECTORY ====================
+bool FileOps::copyDirectory(fs::FS &srcFS, const String &srcPath, fs::FS &dstFS,
+                            const String &dstPath, int depth) {
+  if (depth > MAX_DIR_DEPTH) {
+    return false;
+  }
+
+  File dir = srcFS.open(srcPath);
+  if (!dir || !dir.isDirectory()) {
+    return false;
+  }
+
+  if (!dstFS.exists(dstPath) && !dstFS.mkdir(dstPath)) {
+    dir.close();
+    return false;
+  }
+
+  bool ok = true;
+  File child = dir.openNextFile();
+  while (child && ok) {
+    const String childPath = entryPath(child);
+    const String childName = String(child.name());
+    const String target = joinPath(dstPath, childName);
+    const bool childIsDir = child.isDirectory();
+    child.close();
+
+    ok = childIsDir ? copyDirectory(srcFS, childPath, dstFS, target, depth + 1)
+                    : copyFile(srcFS, childPath, dstFS, target);
+
+    child = dir.openNextFile();
+  }
+  if (child) {
+    child.close();
+  }
+  dir.close();
+
+  return ok;
+}
+
+// ==================== COUNT ENTRIES ====================
+int FileOps::countEntries(fs::FS &fs, const String &path) {
+  File dir = fs.open(path);
+  if (!dir || !dir.isDirectory()) {
+    return 0;
+  }
+
+  int count = 0;
+  File child = dir.openNextFile();
+  while (child) {
+    count++;
+    child.close();
+    child = dir.openNextFile();
+  }
+  dir.close();
+  return count;
 }
 
 // ==================== FILE EXISTS ====================
@@ -148,13 +289,7 @@ size_t FileOps::getFileSize(fs::FS &fs, const String &path) {
 
 // ==================== FORMAT BYTES ====================
 String FileOps::formatBytes(uint64_t bytes) {
-  if (bytes < 1024)
-    return String((int)bytes) + "B";
-  if (bytes < 1048576)
-    return String((int)(bytes / 1024)) + "KB";
-  if (bytes < 1073741824)
-    return String((int)(bytes / 1048576)) + "MB";
-  return String((int)(bytes / 1073741824)) + "GB";
+  return toArduino(PathUtils::formatBytes(bytes));
 }
 
 // ==================== IS DIRECTORY ====================
@@ -167,69 +302,43 @@ bool FileOps::isDirectory(fs::FS &fs, const String &path) {
   return isDir;
 }
 
-// ==================== GET PARENT PATH ====================
+// ==================== PATH HELPERS ====================
 String FileOps::getParentPath(const String &path) {
-  int lastSlash = path.lastIndexOf('/');
-  if (lastSlash <= 0) {
-    return "/";
-  }
-  return path.substring(0, lastSlash);
+  return toArduino(PathUtils::parent(toStd(path)));
 }
 
-// ==================== GET FILENAME ====================
 String FileOps::getFileName(const String &path) {
-  int lastSlash = path.lastIndexOf('/');
-  if (lastSlash < 0) {
-    return path;
-  }
-  return path.substring(lastSlash + 1);
+  return toArduino(PathUtils::fileName(toStd(path)));
 }
 
-// ==================== JOIN PATH ====================
 String FileOps::joinPath(const String &dir, const String &file) {
-  String result = dir;
-  if (!result.endsWith("/")) {
-    result += "/";
-  }
-  result += file;
-  return normalizePath(result);
+  return toArduino(PathUtils::join(toStd(dir), toStd(file)));
 }
 
-// ==================== NORMALIZE PATH ====================
 String FileOps::normalizePath(const String &path) {
-  String result = path;
+  return toArduino(PathUtils::normalize(toStd(path)));
+}
 
-  // Ensure starts with /
-  if (!result.startsWith("/")) {
-    result = "/" + result;
-  }
+bool FileOps::isValidFileName(const String &name) {
+  return PathUtils::isValidFileName(toStd(name));
+}
 
-  // Remove double slashes
-  while (result.indexOf("//") >= 0) {
-    result.replace("//", "/");
-  }
-
-  // Remove trailing slash (except root)
-  if (result.length() > 1 && result.endsWith("/")) {
-    result = result.substring(0, result.length() - 1);
-  }
-
-  return result;
+bool FileOps::isPathInside(const String &base, const String &path) {
+  return PathUtils::isInside(toStd(base), toStd(path));
 }
 
 // ==================== SEARCH FILES ====================
 void FileOps::searchFiles(fs::FS &fs, const String &path, const String &query,
                           std::vector<FileEntry> &results) {
   results.clear();
-  searchRecursive(fs, path, query, results, 0); // Start with depth 0
+  searchRecursive(fs, path, query, results, 0);
 }
 
 // ==================== SEARCH RECURSIVE ====================
-// Added depth limit to prevent stack overflow
 void FileOps::searchRecursive(fs::FS &fs, const String &path,
                               const String &query,
                               std::vector<FileEntry> &results, int depth) {
-  if (results.size() >= MAX_FILES_IN_LIST || depth > 5) { // Limit depth to 5
+  if (results.size() >= MAX_FILES_IN_LIST || depth > MAX_DIR_DEPTH) {
     return;
   }
 
@@ -238,39 +347,46 @@ void FileOps::searchRecursive(fs::FS &fs, const String &path,
     return;
   }
 
+  String lowerQuery = query;
+  lowerQuery.toLowerCase();
+
   File file = dir.openNextFile();
   while (file && results.size() < MAX_FILES_IN_LIST) {
-    String fileName = String(file.name());
+    // Base name for matching, full path for opening the result later. The old
+    // code used name() for both, so it recursed into a relative path that
+    // never opened - search only ever scanned the current directory - and the
+    // results it did return could not be opened from a subdirectory.
+    const String baseName = String(file.name());
+    const String childPath = entryPath(file);
+    const bool childIsDir = file.isDirectory();
 
-    // Extract just the filename
-    int lastSlash = fileName.lastIndexOf('/');
-    String baseName =
-        (lastSlash >= 0) ? fileName.substring(lastSlash + 1) : fileName;
-
-    // Skip hidden files
     if (baseName.length() > 0 && baseName[0] != '.') {
-      // Check if matches query (case-insensitive)
       String lowerName = baseName;
       lowerName.toLowerCase();
-      String lowerQuery = query;
-      lowerQuery.toLowerCase();
 
       if (lowerName.indexOf(lowerQuery) >= 0) {
         FileEntry entry;
-        entry.name = fileName; // Full path
-        entry.isDirectory = file.isDirectory();
+        entry.name = baseName;
+        entry.fullPath = childPath;
+        entry.isDirectory = childIsDir;
         entry.size = file.size();
         entry.modified = file.getLastWrite();
         results.push_back(entry);
       }
 
-      // Recurse into subdirectories
-      if (file.isDirectory()) {
-        searchRecursive(fs, fileName, query, results, depth + 1);
+      file.close();
+
+      if (childIsDir) {
+        searchRecursive(fs, childPath, query, results, depth + 1);
       }
+    } else {
+      file.close();
     }
 
     file = dir.openNextFile();
+  }
+  if (file) {
+    file.close();
   }
 
   dir.close();

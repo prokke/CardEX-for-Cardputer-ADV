@@ -61,6 +61,14 @@ private:
   int selectedIndex;
   int scrollOffset;
 
+  // True while `files` holds search results rather than the contents of
+  // currentPath. Entries then carry paths from anywhere under the search root.
+  bool searchMode;
+  String searchQuery;
+
+  // Set when a listing hit MAX_FILES_IN_LIST and is therefore incomplete.
+  bool listTruncated;
+
   // Editor
   TextEditor editor;
   bool inEditor;
@@ -77,9 +85,6 @@ private:
   AppMode appMode; // Current mode
 
   MassStorage massStorage;
-
-  // Navigation history (stores directory names for back navigation)
-  std::vector<String> dirHistory;
 
   // Helper methods
   fs::FS &getCurrentFS();

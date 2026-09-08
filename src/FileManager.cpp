@@ -12,6 +12,8 @@ FileManager::FileManager() {
   scrollOffset = 0;
   inEditor = false;
   clipboardOperation = OP_NONE;
+  searchMode = false;
+  listTruncated = false;
   lastBatteryLevel = 0;
   lastBatteryCheck = 0;
 }
@@ -83,12 +85,19 @@ void FileManager::render() {
   if (inEditor) {
     editor.render();
   } else {
-    // Draw to canvas
-    UI::drawHeader(currentPath, useSD, lastBatteryLevel);
+    // Draw to canvas. In search mode the list no longer reflects currentPath,
+    // so say so rather than showing a path the entries do not belong to.
+    UI::drawHeader(searchMode ? ("Found: " + searchQuery) : currentPath, useSD,
+                   lastBatteryLevel);
     UI::drawFileList(files, selectedIndex, scrollOffset);
 
     // Footer info
     String countInfo = String(files.size()) + " items";
+    if (listTruncated) {
+      // MAX_FILES_IN_LIST entries were listed and there were more; the old
+      // build just stopped, with nothing on screen to say so.
+      countInfo += "+";
+    }
 
     // Add free space info
     String freeSpaceStr = "";
@@ -123,7 +132,9 @@ void FileManager::navigateUp() {
 
 // ==================== NAVIGATE DOWN ====================
 void FileManager::navigateDown() {
-  if (selectedIndex < files.size() - 1) {
+  // (int) matters: files.size() is unsigned, so on an empty list size() - 1 is
+  // SIZE_MAX and the comparison was always true.
+  if (selectedIndex < (int)files.size() - 1) {
     selectedIndex++;
     ensureSelectionVisible();
   }
@@ -136,16 +147,15 @@ void FileManager::openSelected() {
   }
 
   FileEntry &entry = files[selectedIndex];
-  String fullPath = FileOps::joinPath(currentPath, entry.name);
+  const String fullPath = entry.fullPath;
 
   if (entry.isDirectory) {
-    // Save current directory name to history before entering
-    dirHistory.push_back(entry.name);
-    
-    // Navigate into directory
+    // Navigate into directory. Search results live outside currentPath, so the
+    // entry's own absolute path is the only correct source here.
     currentPath = fullPath;
     selectedIndex = 0;
     scrollOffset = 0;
+    searchMode = false;
     refreshFileList();
   } else {
     // Open file in editor
@@ -160,16 +170,21 @@ void FileManager::openSelected() {
 
 // ==================== GO BACK ====================
 void FileManager::goBack() {
+  // Leaving search results returns to the directory the search started in.
+  if (searchMode) {
+    searchMode = false;
+    refreshFileList();
+    return;
+  }
+
   if (currentPath == "/") {
     return;
   }
 
-  // Get the directory name we're returning to
-  String lastDir = "";
-  if (!dirHistory.empty()) {
-    lastDir = dirHistory.back();
-    dirHistory.pop_back();
-  }
+  // The directory we are leaving is the last component of the current path.
+  // Deriving it beats the old parallel dirHistory stack, which drifted out of
+  // sync whenever the list was replaced by a search.
+  const String lastDir = FileOps::getFileName(currentPath);
 
   currentPath = FileOps::getParentPath(currentPath);
   selectedIndex = 0;
@@ -178,7 +193,7 @@ void FileManager::goBack() {
   
   // Find and select the directory we came from
   if (lastDir.length() > 0) {
-    for (int i = 0; i < files.size(); i++) {
+    for (int i = 0; i < (int)files.size(); i++) {
       if (files[i].name == lastDir) {
         selectedIndex = i;
         ensureSelectionVisible();
@@ -193,6 +208,14 @@ void FileManager::createNewFile() {
   String fileName = UI::showInputDialog("New File", "Name:");
   if (fileName.length() == 0)
     return;
+
+  // The dialog accepts any character, so "../CardEX.ini" used to be a valid
+  // answer: joinPath would resolve it and the file would be created outside
+  // the current directory.
+  if (!FileOps::isValidFileName(fileName)) {
+    UI::showToast("Invalid name", ERROR_COLOR);
+    return;
+  }
 
   String fullPath = FileOps::joinPath(currentPath, fileName);
 
@@ -217,6 +240,11 @@ void FileManager::createNewFolder() {
   if (folderName.length() == 0)
     return;
 
+  if (!FileOps::isValidFileName(folderName)) {
+    UI::showToast("Invalid name", ERROR_COLOR);
+    return;
+  }
+
   String fullPath = FileOps::joinPath(currentPath, folderName);
 
   if (FileOps::createDirectory(getCurrentFS(), fullPath)) {
@@ -233,15 +261,22 @@ void FileManager::deleteSelected() {
     return;
 
   FileEntry &entry = files[selectedIndex];
-  String message = "Delete \"" + entry.name + "\"?";
+  const String fullPath = entry.fullPath;
+
+  String message = "Delete \"" + UI::truncateString(entry.name, 18) + "\"?";
+  if (entry.isDirectory) {
+    // Deleting a folder is recursive, so say what is inside before doing it.
+    const int childCount = FileOps::countEntries(getCurrentFS(), fullPath);
+    if (childCount > 0) {
+      message = "Folder + " + String(childCount) + " items?";
+    }
+  }
 
   if (!UI::showConfirmDialog("Confirm Delete", message)) {
     return;
   }
 
-  String fullPath = FileOps::joinPath(currentPath, entry.name);
   bool success = false;
-
   if (entry.isDirectory) {
     success = FileOps::deleteDirectory(getCurrentFS(), fullPath);
   } else {
@@ -250,7 +285,7 @@ void FileManager::deleteSelected() {
 
   if (success) {
     UI::showToast("Deleted", ACCENT_COLOR);
-    if (selectedIndex >= files.size() - 1 && selectedIndex > 0) {
+    if (selectedIndex >= (int)files.size() - 1 && selectedIndex > 0) {
       selectedIndex--;
     }
     refreshFileList();
@@ -270,8 +305,20 @@ void FileManager::renameSelected() {
   if (newName.length() == 0 || newName == entry.name)
     return;
 
-  String oldPath = FileOps::joinPath(currentPath, entry.name);
-  String newPath = FileOps::joinPath(currentPath, newName);
+  if (!FileOps::isValidFileName(newName)) {
+    UI::showToast("Invalid name", ERROR_COLOR);
+    return;
+  }
+
+  const String oldPath = entry.fullPath;
+  const String newPath =
+      FileOps::joinPath(FileOps::getParentPath(oldPath), newName);
+
+  // rename() over an existing entry is not something the user asked for.
+  if (FileOps::fileExists(getCurrentFS(), newPath)) {
+    UI::showToast("Name already exists", ERROR_COLOR);
+    return;
+  }
 
   if (FileOps::renameFile(getCurrentFS(), oldPath, newPath)) {
     UI::showToast("Renamed", ACCENT_COLOR);
@@ -287,8 +334,7 @@ void FileManager::copySelected() {
     return;
 
   clipboard.clear();
-  clipboard.push_back(
-      FileOps::joinPath(currentPath, files[selectedIndex].name));
+  clipboard.push_back(files[selectedIndex].fullPath);
   clipboardOperation = OP_COPY;
 
   UI::showToast("Copied to clipboard", ACCENT_COLOR);
@@ -300,8 +346,7 @@ void FileManager::moveSelected() {
     return;
 
   clipboard.clear();
-  clipboard.push_back(
-      FileOps::joinPath(currentPath, files[selectedIndex].name));
+  clipboard.push_back(files[selectedIndex].fullPath);
   clipboardOperation = OP_MOVE;
 
   UI::showToast("Cut to clipboard", ACCENT_COLOR);
@@ -316,32 +361,48 @@ void FileManager::pasteFromClipboard() {
 
   int successCount = 0;
   for (const String &srcPath : clipboard) {
-    String fileName = FileOps::getFileName(srcPath);
+    fs::FS &fs = getCurrentFS();
+
+    if (!FileOps::fileExists(fs, srcPath)) {
+      UI::showToast("Source is gone", ERROR_COLOR);
+      continue;
+    }
+
+    const bool srcIsDir = FileOps::isDirectory(fs, srcPath);
+    const String fileName = FileOps::getFileName(srcPath);
     String dstPath = FileOps::joinPath(currentPath, fileName);
 
-    // Check availability
-    fs::FS &fs = getCurrentFS(); // Only SD supported now
+    // Copying or moving a folder into its own subtree would recurse until the
+    // card filled up. isPathInside() normalizes both sides first.
+    if (srcIsDir && FileOps::isPathInside(srcPath, currentPath)) {
+      UI::showToast("Cannot paste into itself", ERROR_COLOR);
+      continue;
+    }
+    if (dstPath == srcPath) {
+      UI::showToast("Already here", WARNING_COLOR);
+      continue;
+    }
 
-    // Handle name collision for COPY or if needed
+    // Handle name collision: name.ext -> name-copy.ext, then -copy-1 and so on.
     if (FileOps::fileExists(fs, dstPath)) {
-        // Naming strategy: name.ext -> name-copy.ext
-        // If name-copy.ext exists -> name-copy-copy.ext (simple)
-        // or name-copy-1.ext (better, but simpler for now)
-        
-        int extIndex = fileName.lastIndexOf('.');
-        String namePart = (extIndex > 0) ? fileName.substring(0, extIndex) : fileName;
-        String extPart = (extIndex > 0) ? fileName.substring(extIndex) : "";
-        
-        String newName = namePart + "-copy" + extPart;
+      const int extIndex = srcIsDir ? -1 : fileName.lastIndexOf('.');
+      const String namePart =
+          (extIndex > 0) ? fileName.substring(0, extIndex) : fileName;
+      const String extPart = (extIndex > 0) ? fileName.substring(extIndex) : "";
+
+      String newName = namePart + "-copy" + extPart;
+      dstPath = FileOps::joinPath(currentPath, newName);
+
+      int attempt = 1;
+      while (FileOps::fileExists(fs, dstPath) && attempt <= 99) {
+        newName = namePart + "-copy-" + String(attempt) + extPart;
         dstPath = FileOps::joinPath(currentPath, newName);
-        
-        // Very basic simple check loop for multiple copies
-        int safety = 0;
-        while (FileOps::fileExists(fs, dstPath) && safety < 10) {
-            newName = namePart + "-copy-" + String(safety + 1) + extPart;
-            dstPath = FileOps::joinPath(currentPath, newName);
-            safety++;
-        }
+        attempt++;
+      }
+      if (FileOps::fileExists(fs, dstPath)) {
+        UI::showToast("Too many copies", ERROR_COLOR);
+        continue;
+      }
     }
 
     // Callback for progress
@@ -352,9 +413,19 @@ void FileManager::pasteFromClipboard() {
 
     bool success = false;
     if (clipboardOperation == OP_COPY) {
-      success = FileOps::copyFile(fs, srcPath, fs, dstPath, progress);
+      // Folders used to fall straight through copyFile(), which refuses
+      // directories, so "cut/copy a folder then paste" always failed.
+      success = srcIsDir ? FileOps::copyDirectory(fs, srcPath, fs, dstPath)
+                         : FileOps::copyFile(fs, srcPath, fs, dstPath, progress);
     } else if (clipboardOperation == OP_MOVE) {
-      success = FileOps::moveFile(fs, srcPath, fs, dstPath, progress);
+      if (srcIsDir) {
+        success = fs.rename(srcPath, dstPath);
+        if (!success && FileOps::copyDirectory(fs, srcPath, fs, dstPath)) {
+          success = FileOps::deleteDirectory(fs, srcPath);
+        }
+      } else {
+        success = FileOps::moveFile(fs, srcPath, fs, dstPath, progress);
+      }
     }
 
     if (success) {
@@ -400,7 +471,9 @@ void FileManager::showFileProperties() {
   UI::canvas.drawString(
       "Type: " + (entry.isDirectory ? String("Folder") : String("File")), 5, y);
   y += 12;
-  UI::canvas.drawString("Path: " + UI::truncateString(currentPath, 30), 5, y);
+  UI::canvas.drawString(
+      "Path: " + UI::truncateString(FileOps::getParentPath(entry.fullPath), 30),
+      5, y);
 
   y += 20;
   UI::canvas.setTextColor(SECONDARY_COLOR, BG_COLOR);
@@ -467,7 +540,11 @@ void FileManager::searchFiles() {
     files = results;
     selectedIndex = 0;
     scrollOffset = 0;
-    UI::showToast(String(results.size()) + " files found", ACCENT_COLOR);
+    // Without this the replaced list was a dead end: currentPath still pointed
+    // at the search root, so Back at the top level did nothing at all.
+    searchMode = true;
+    searchQuery = query;
+    UI::showToast(String(results.size()) + " found - Esc to exit", ACCENT_COLOR);
   }
 }
 
@@ -479,10 +556,11 @@ fs::FS &FileManager::getCurrentFS() { return (fs::FS &)SD; }
 
 // ==================== REFRESH FILE LIST ====================
 void FileManager::refreshFileList() {
-  FileOps::listDirectory(getCurrentFS(), currentPath, files);
+  searchMode = false;
+  FileOps::listDirectory(getCurrentFS(), currentPath, files, &listTruncated);
 
   // Ensure selection is valid
-  if (selectedIndex >= files.size()) {
+  if (selectedIndex >= (int)files.size()) {
     selectedIndex = max(0, (int)files.size() - 1);
   }
 
@@ -539,7 +617,7 @@ void FileManager::handleKeyboard() {
       openSelected();
       return; // The list may have been replaced; do not process stale events.
     }
-    if (event.isBackspace()) {
+    if (event.isBackspace() || event.isEsc()) {
       goBack();
       return;
     }
