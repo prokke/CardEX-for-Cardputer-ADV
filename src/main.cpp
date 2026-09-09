@@ -10,8 +10,7 @@
  * - Context-sensitive help (Opt)
  *
  * Author: -Prokke
- * Version: 1.0.0
- * Date: 2026-01-26
+ * Version: see CARDEX_VERSION in src/Config.h
  */
 
 #include "Config.h"
@@ -34,7 +33,7 @@ void setup() {
   delay(100);
 
   Serial.println("==============");
-  Serial.println("CardEX v1.0.0");
+  Serial.println("CardEX v" CARDEX_VERSION);
   Serial.println("==============");
 
   // Initialize M5Cardputer
@@ -67,7 +66,7 @@ void setup() {
   M5Cardputer.Display.setTextColor(ACCENT_COLOR, BG_COLOR);
   UI::drawCenteredText("FILE MANAGER", 40, ACCENT_COLOR);
   M5Cardputer.Display.setTextColor(TEXT_COLOR, BG_COLOR);
-  UI::drawCenteredText("v1.0.0", 55, TEXT_COLOR);
+  UI::drawCenteredText("v" CARDEX_VERSION, 55, TEXT_COLOR);
   M5Cardputer.Display.setTextColor(SECONDARY_COLOR, BG_COLOR);
   UI::drawCenteredText("Initializing...", 75, SECONDARY_COLOR);
 

@@ -3,6 +3,11 @@
 
 #include <Arduino.h>
 
+// ==================== VERSION ====================
+// Single source of truth. The version used to be spelled out three times in
+// main.cpp, which is exactly the sort of thing that goes stale.
+#define CARDEX_VERSION "2.0.0"
+
 // ==================== DISPLAY CONFIGURATION ====================
 #define SCREEN_WIDTH 240
 #define SCREEN_HEIGHT 135
